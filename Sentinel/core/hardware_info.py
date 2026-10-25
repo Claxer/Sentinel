@@ -1,17 +1,22 @@
 import platform
 import socket
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 import psutil
 
 
 class HardwareInfo:
     def get_cpu_info(self):
-        cpu_frequency = psutil.cpu_freq()
+        frequency = psutil.cpu_freq()
 
-        if cpu_frequency:
-            current_speed = f"{cpu_frequency.current / 1000:.2f} GHz"
-            max_speed = f"{cpu_frequency.max / 1000:.2f} GHz"
+        if frequency:
+            current_speed = f"{frequency.current / 1000:.2f} GHz"
+            max_speed = (
+                f"{frequency.max / 1000:.2f} GHz"
+                if frequency.max
+                else "Not available"
+            )
         else:
             current_speed = "Not available"
             max_speed = "Not available"
@@ -23,6 +28,7 @@ class HardwareInfo:
             "logical_cores": psutil.cpu_count(logical=True) or 0,
             "current_speed": current_speed,
             "max_speed": max_speed,
+            "usage_percent": psutil.cpu_percent(interval=None),
         }
 
     def get_memory_info(self):
@@ -36,6 +42,7 @@ class HardwareInfo:
             "usage_percent": memory.percent,
             "swap_total_gb": round(swap.total / (1024 ** 3), 2),
             "swap_used_gb": round(swap.used / (1024 ** 3), 2),
+            "swap_percent": swap.percent,
         }
 
     def get_disk_info(self):
@@ -62,40 +69,120 @@ class HardwareInfo:
 
     def get_network_info(self):
         adapters = []
-        adapter_addresses = psutil.net_if_addrs()
-        adapter_status = psutil.net_if_stats()
+        addresses = psutil.net_if_addrs()
+        statuses = psutil.net_if_stats()
+        counters = psutil.net_io_counters(pernic=True)
 
-        for adapter_name, addresses in adapter_addresses.items():
-            ipv4_addresses = []
+        for name, adapter_addresses in addresses.items():
+            ipv4 = []
+            ipv6 = []
 
-            for address in addresses:
+            for address in adapter_addresses:
                 if address.family == socket.AF_INET:
-                    ipv4_addresses.append(address.address)
+                    ipv4.append(address.address)
+                elif address.family == socket.AF_INET6:
+                    ipv6.append(address.address.split("%")[0])
 
-            status = adapter_status.get(adapter_name)
-            is_up = status.isup if status else False
-            speed = status.speed if status else 0
+            status = statuses.get(name)
+            counter = counters.get(name)
 
             adapters.append({
-                "name": adapter_name,
-                "ipv4": ", ".join(ipv4_addresses) or "No IPv4 address",
-                "status": "Connected" if is_up else "Disconnected",
-                "speed_mbps": speed,
+                "name": name,
+                "ipv4": ", ".join(ipv4) or "Not available",
+                "ipv6": ", ".join(ipv6) or "Not available",
+                "status": (
+                    "Connected" if status and status.isup
+                    else "Disconnected"
+                ),
+                "speed_mbps": status.speed if status else 0,
+                "bytes_sent_mb": (
+                    round(counter.bytes_sent / (1024 ** 2), 2)
+                    if counter else 0
+                ),
+                "bytes_received_mb": (
+                    round(counter.bytes_recv / (1024 ** 2), 2)
+                    if counter else 0
+                ),
             })
 
         return adapters
 
+    def get_battery_info(self):
+        try:
+            battery = psutil.sensors_battery()
+        except (AttributeError, OSError):
+            battery = None
+
+        if battery is None:
+            return {
+                "available": False,
+                "message": "Battery information is unavailable.",
+            }
+
+        if battery.power_plugged:
+            power_status = "Plugged in"
+        else:
+            power_status = "On battery"
+
+        if battery.secsleft == psutil.POWER_TIME_UNLIMITED:
+            remaining = "Unlimited"
+        elif battery.secsleft == psutil.POWER_TIME_UNKNOWN:
+            remaining = "Unknown"
+        else:
+            remaining = str(
+                timedelta(seconds=max(0, battery.secsleft))
+            )
+
+        return {
+            "available": True,
+            "percent": battery.percent,
+            "power_status": power_status,
+            "time_remaining": remaining,
+        }
+
+    def get_temperature_info(self):
+        # Temperature sensor support varies by operating system and hardware.
+        try:
+            sensors = psutil.sensors_temperatures(fahrenheit=False)
+        except (AttributeError, OSError):
+            sensors = {}
+
+        readings = []
+
+        for sensor_name, entries in sensors.items():
+            for entry in entries:
+                readings.append({
+                    "sensor": sensor_name,
+                    "label": entry.label or "Unnamed sensor",
+                    "current_celsius": entry.current,
+                    "high_celsius": entry.high,
+                    "critical_celsius": entry.critical,
+                })
+
+        return {
+            "available": bool(readings),
+            "readings": readings,
+            "message": (
+                "Temperature sensors detected."
+                if readings
+                else "Temperature readings are not exposed by this system."
+            ),
+        }
+
     def get_system_info(self):
         boot_timestamp = psutil.boot_time()
         boot_time = datetime.fromtimestamp(boot_timestamp)
+        uptime_seconds = max(0, time.time() - boot_timestamp)
 
         return {
             "computer_name": platform.node(),
             "operating_system": platform.system(),
             "os_version": platform.version(),
             "os_release": platform.release(),
+            "architecture": platform.architecture()[0],
             "python_version": platform.python_version(),
             "boot_time": boot_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "uptime": str(timedelta(seconds=int(uptime_seconds))),
         }
 
     def get_all_info(self):
@@ -104,5 +191,7 @@ class HardwareInfo:
             "memory": self.get_memory_info(),
             "disks": self.get_disk_info(),
             "network": self.get_network_info(),
+            "battery": self.get_battery_info(),
+            "temperature": self.get_temperature_info(),
             "system": self.get_system_info(),
         }
