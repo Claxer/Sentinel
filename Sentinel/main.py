@@ -1,655 +1,1015 @@
-import customtkinter as ctk
+import tkinter as tk
 from tkinter import ttk, messagebox
-from matplotlib.figure import Figure
+import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from datetime import datetime
 
 from core.system_monitor import SystemMonitor
 from core.process_manager import ProcessManager
+from core.alert_manager import AlertManager
+from ui.hardware import HardwarePage
+from ui.alerts import AlertsPage
+from ui.reports import ReportsPage
 
+
+# =========================
+# SENTINEL MAIN APPLICATION
+# =========================
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
 
 class SentinelApp(ctk.CTk):
-
     def __init__(self):
         super().__init__()
 
         self.title("Sentinel | System Monitor")
-        self.geometry("1250x820")
-        self.minsize(1000, 680)
-        self.configure(fg_color="#111315")
+        self.geometry("1350x850")
+        self.minsize(1050, 700)
+        self.configure(fg_color="#111111")
 
-        self.bg_color = "#111315"
-        self.sidebar_color = "#191c20"
-        self.card_color = "#202429"
-        self.text_color = "#f1f3f5"
-        self.muted_color = "#9299a3"
-
-        self.current_page = "Dashboard"
-        self.monitor = SystemMonitor()
+        # Core managers
+        self.system_monitor = SystemMonitor()
         self.process_manager = ProcessManager()
+        self.alert_manager = AlertManager()
 
-        self.refresh_job = None
-        self.process_refresh_job = None
-        self.process_data = []
+        # Navigation and scheduled tasks
+        self.current_page = None
+        self.after_jobs = []
 
-        self.history_limit = 30
+        # Dashboard graph data
         self.cpu_history = []
         self.ram_history = []
-        self.download_history = []
-        self.upload_history = []
+        self.network_history = []
+        self.history_limit = 30
 
+        # Process table data
+        self.process_search_var = tk.StringVar()
+
+        self.configure_styles()
+        self.create_layout()
+        self.navigate("Dashboard")
+
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # =========================
+    # APPLICATION LAYOUT
+    # =========================
+
+    def configure_styles(self):
+        style = ttk.Style()
+
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure(
+            "Treeview",
+            background="#202020",
+            foreground="#E5E5E5",
+            fieldbackground="#202020",
+            borderwidth=0,
+            rowheight=30,
+            font=("Segoe UI", 10)
+        )
+
+        style.configure(
+            "Treeview.Heading",
+            background="#303030",
+            foreground="#FFFFFF",
+            relief="flat",
+            font=("Segoe UI", 10, "bold")
+        )
+
+        style.map(
+            "Treeview",
+            background=[("selected", "#454545")],
+            foreground=[("selected", "#FFFFFF")]
+        )
+
+        style.map(
+            "Treeview.Heading",
+            background=[("active", "#404040")]
+        )
+
+    def create_layout(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.create_sidebar()
-        self.create_main_area()
-        self.navigate("Dashboard")
+        # Sidebar
+        self.sidebar = ctk.CTkFrame(
+            self,
+            width=220,
+            corner_radius=0,
+            fg_color="#181818"
+        )
+        self.sidebar.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+        self.sidebar.grid_propagate(False)
 
-        self.protocol("WM_DELETE_WINDOW", self.close_app)
+        # Main content
+        self.content_frame = ctk.CTkFrame(
+            self,
+            corner_radius=0,
+            fg_color="#111111"
+        )
+        self.content_frame.grid(
+            row=0,
+            column=1,
+            sticky="nsew"
+        )
+        self.content_frame.grid_rowconfigure(0, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+
+        self.create_sidebar()
 
     def create_sidebar(self):
-        self.sidebar = ctk.CTkFrame(
-            self, width=220, corner_radius=0,
-            fg_color=self.sidebar_color
-        )
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        self.sidebar.grid_propagate(False)
-        self.sidebar.grid_columnconfigure(0, weight=1)
-
         ctk.CTkLabel(
             self.sidebar,
             text="SENTINEL",
-            font=ctk.CTkFont(size=23, weight="bold"),
-            text_color=self.text_color
-        ).grid(row=0, column=0, padx=24, pady=(30, 4), sticky="w")
+            font=ctk.CTkFont(size=25, weight="bold"),
+            text_color="#FFFFFF"
+        ).pack(
+            anchor="w",
+            padx=24,
+            pady=(30, 2)
+        )
 
         ctk.CTkLabel(
             self.sidebar,
-            text="SMART SYSTEM MONITOR",
-            font=ctk.CTkFont(size=10),
-            text_color=self.muted_color
-        ).grid(row=1, column=0, padx=25, pady=(0, 32), sticky="w")
+            text="SYSTEM MONITOR",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color="#777777"
+        ).pack(
+            anchor="w",
+            padx=25,
+            pady=(0, 30)
+        )
 
         self.nav_buttons = {}
 
-        for index, page in enumerate(
-            ["Dashboard", "Processes", "Hardware", "Alerts", "Reports"],
-            start=2
-        ):
+        navigation_items = [
+            ("Dashboard", "Dashboard"),
+            ("Processes", "Processes"),
+            ("Hardware", "Hardware"),
+            ("Alerts", "Alerts"),
+            ("Reports", "Reports")
+        ]
+
+        for label, page in navigation_items:
             button = ctk.CTkButton(
                 self.sidebar,
-                text=page,
+                text=label,
                 height=42,
-                anchor="w",
                 corner_radius=8,
-                font=ctk.CTkFont(size=14),
+                anchor="w",
+                font=ctk.CTkFont(size=13),
                 fg_color="transparent",
-                hover_color="#2a2e35",
-                text_color=self.text_color,
-                command=lambda name=page: self.navigate(name)
+                hover_color="#303030",
+                text_color="#BDBDBD",
+                command=lambda selected_page=page: self.navigate(
+                    selected_page
+                )
             )
-            button.grid(
-                row=index, column=0, padx=14, pady=4, sticky="ew"
+
+            button.pack(
+                fill="x",
+                padx=14,
+                pady=4
             )
+
             self.nav_buttons[page] = button
 
-        self.sidebar.grid_rowconfigure(8, weight=1)
-
-        footer = ctk.CTkFrame(self.sidebar, fg_color="transparent")
-        footer.grid(row=9, column=0, padx=20, pady=20, sticky="ew")
+        # Sidebar footer
+        ctk.CTkFrame(
+            self.sidebar,
+            height=1,
+            fg_color="#333333"
+        ).pack(
+            fill="x",
+            padx=18,
+            pady=(25, 12)
+        )
 
         ctk.CTkLabel(
-            footer, text="SENTINEL",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color=self.muted_color
-        ).pack(anchor="w")
-
-        ctk.CTkLabel(
-            footer, text="Version 1.0.0",
+            self.sidebar,
+            text="System Utilities",
             font=ctk.CTkFont(size=11),
-            text_color=self.muted_color
-        ).pack(anchor="w", pady=(3, 0))
+            text_color="#777777"
+        ).pack(
+            anchor="w",
+            padx=24
+        )
 
-    def create_main_area(self):
-        self.main_area = ctk.CTkFrame(
-            self, corner_radius=0, fg_color=self.bg_color
+        ctk.CTkLabel(
+            self.sidebar,
+            text="Sentinel v1.0",
+            font=ctk.CTkFont(size=11),
+            text_color="#666666"
+        ).pack(
+            anchor="w",
+            padx=24,
+            pady=(5, 20)
         )
-        self.main_area.grid(row=0, column=1, sticky="nsew")
-        self.main_area.grid_columnconfigure(0, weight=1)
-        self.main_area.grid_rowconfigure(0, weight=1)
 
-        self.content = ctk.CTkFrame(
-            self.main_area, fg_color="transparent"
-        )
-        self.content.grid(
-            row=0, column=0, sticky="nsew", padx=25, pady=22
-        )
+    # =========================
+    # NAVIGATION
+    # =========================
+
+    def cancel_scheduled_jobs(self):
+        for job in self.after_jobs:
+            try:
+                self.after_cancel(job)
+            except (tk.TclError, ValueError):
+                pass
+
+        self.after_jobs.clear()
+
+    def schedule_job(self, delay, callback):
+        job = self.after(delay, callback)
+        self.after_jobs.append(job)
+        return job
 
     def clear_content(self):
-        if self.refresh_job is not None:
-            self.after_cancel(self.refresh_job)
-            self.refresh_job = None
+        self.cancel_scheduled_jobs()
 
-        if self.process_refresh_job is not None:
-            self.after_cancel(self.process_refresh_job)
-            self.process_refresh_job = None
-
-        for widget in self.content.winfo_children():
+        for widget in self.content_frame.winfo_children():
             widget.destroy()
 
     def navigate(self, page):
+        self.clear_content()
         self.current_page = page
 
-        for name, button in self.nav_buttons.items():
-            button.configure(
-                fg_color="#303746" if name == page else "transparent",
-                text_color="#ffffff" if name == page else self.text_color
-            )
+        for page_name, button in self.nav_buttons.items():
+            if page_name == page:
+                button.configure(
+                    fg_color="#333333",
+                    text_color="#FFFFFF"
+                )
+            else:
+                button.configure(
+                    fg_color="transparent",
+                    text_color="#BDBDBD"
+                )
 
         if page == "Dashboard":
             self.show_dashboard()
+
         elif page == "Processes":
             self.show_processes()
-        else:
-            self.show_placeholder(page)
 
-    def create_metric_card(self, title, value, row, column):
-        card = ctk.CTkFrame(
-            self.content, fg_color=self.card_color, corner_radius=12
+        elif page == "Hardware":
+            self.show_hardware()
+
+        elif page == "Alerts":
+            self.show_alerts()
+
+        elif page == "Reports":
+            self.show_reports()
+
+    # =========================
+    # SHARED UI HELPERS
+    # =========================
+
+    def create_page_header(self, title, description):
+        header = ctk.CTkFrame(
+            self.content_frame,
+            fg_color="transparent"
         )
-        card.grid(
-            row=row, column=column, padx=6, pady=6, sticky="ew"
-        )
-
-        ctk.CTkLabel(
-            card, text=title,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=self.muted_color
-        ).pack(anchor="w", padx=16, pady=(12, 3))
-
-        value_label = ctk.CTkLabel(
-            card, text=value,
-            font=ctk.CTkFont(size=25, weight="bold"),
-            text_color=self.text_color
-        )
-        value_label.pack(anchor="w", padx=16, pady=(0, 12))
-        return value_label
-
-    def show_dashboard(self):
-        self.clear_content()
-        self.content.grid_columnconfigure((0, 1), weight=1)
-
-        header = ctk.CTkFrame(self.content, fg_color="transparent")
         header.grid(
-            row=0, column=0, columnspan=2,
-            sticky="ew", pady=(0, 15)
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=28,
+            pady=(25, 12)
         )
 
         ctk.CTkLabel(
-            header, text="System Overview",
+            header,
+            text=title,
             font=ctk.CTkFont(size=27, weight="bold"),
-            text_color=self.text_color
+            text_color="#FFFFFF"
         ).pack(anchor="w")
 
         ctk.CTkLabel(
             header,
-            text="Live performance monitoring and system statistics",
-            font=ctk.CTkFont(size=13),
-            text_color=self.muted_color
-        ).pack(anchor="w", pady=(4, 0))
+            text=description,
+            font=ctk.CTkFont(size=12),
+            text_color="#999999"
+        ).pack(
+            anchor="w",
+            pady=(4, 0)
+        )
+
+        return header
+
+    def create_metric_card(self, parent, title, initial_value, column):
+        card = ctk.CTkFrame(
+            parent,
+            fg_color="#1D1D1D",
+            corner_radius=12
+        )
+        card.grid(
+            row=0,
+            column=column,
+            sticky="nsew",
+            padx=6,
+            pady=6
+        )
+
+        ctk.CTkLabel(
+            card,
+            text=title,
+            font=ctk.CTkFont(size=12),
+            text_color="#999999"
+        ).pack(
+            anchor="w",
+            padx=16,
+            pady=(15, 5)
+        )
+
+        value_label = ctk.CTkLabel(
+            card,
+            text=initial_value,
+            font=ctk.CTkFont(size=25, weight="bold"),
+            text_color="#FFFFFF"
+        )
+        value_label.pack(
+            anchor="w",
+            padx=16,
+            pady=(0, 15)
+        )
+
+        return value_label
+
+    def safe_metric(self, metrics, key, default=0):
+        value = metrics.get(key, default)
+
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    # =========================
+    # DASHBOARD
+    # =========================
+
+    def show_dashboard(self):
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(1, weight=1)
+
+        self.create_page_header(
+            "Dashboard",
+            "Live overview of your computer's performance"
+        )
+
+        dashboard_body = ctk.CTkScrollableFrame(
+            self.content_frame,
+            fg_color="transparent",
+            corner_radius=0
+        )
+        dashboard_body.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=22,
+            pady=(0, 20)
+        )
+        dashboard_body.grid_columnconfigure(0, weight=1)
+
+        # Metric cards
+        cards_frame = ctk.CTkFrame(
+            dashboard_body,
+            fg_color="transparent"
+        )
+        cards_frame.grid(
+            row=0,
+            column=0,
+            sticky="ew"
+        )
+
+        for column in range(4):
+            cards_frame.grid_columnconfigure(column, weight=1)
 
         self.cpu_value = self.create_metric_card(
-            "CPU USAGE", "0%", 1, 0
+            cards_frame, "CPU USAGE", "0%", 0
         )
         self.ram_value = self.create_metric_card(
-            "MEMORY USAGE", "0%", 1, 1
+            cards_frame, "MEMORY USAGE", "0%", 1
         )
         self.disk_value = self.create_metric_card(
-            "DISK USAGE", "0%", 2, 0
+            cards_frame, "DISK USAGE", "0%", 2
         )
         self.network_value = self.create_metric_card(
-            "NETWORK ACTIVITY", "0 KB/s", 2, 1
+            cards_frame, "DOWNLOAD SPEED", "0 KB/s", 3
         )
 
-        chart_frame = ctk.CTkFrame(
-            self.content, fg_color=self.card_color, corner_radius=12
+        # System information panel
+        self.info_panel = ctk.CTkFrame(
+            dashboard_body,
+            fg_color="#1D1D1D",
+            corner_radius=12
         )
-        chart_frame.grid(
-            row=3, column=0, columnspan=2,
-            sticky="nsew", pady=(15, 0)
+        self.info_panel.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=6,
+            pady=(12, 6)
         )
-        self.content.grid_rowconfigure(3, weight=1)
+
+        self.info_label = ctk.CTkLabel(
+            self.info_panel,
+            text="Loading system information...",
+            font=ctk.CTkFont(size=12),
+            text_color="#BBBBBB",
+            justify="left",
+            anchor="w"
+        )
+        self.info_label.pack(
+            fill="x",
+            padx=18,
+            pady=15
+        )
+
+        # Graphs panel
+        graph_panel = ctk.CTkFrame(
+            dashboard_body,
+            fg_color="#1D1D1D",
+            corner_radius=12
+        )
+        graph_panel.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=6,
+            pady=6
+        )
+        graph_panel.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            graph_panel,
+            text="Performance History",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            text_color="#FFFFFF"
+        ).pack(
+            anchor="w",
+            padx=16,
+            pady=(14, 0)
+        )
 
         self.figure = Figure(
-            figsize=(8, 3.4), dpi=100, facecolor=self.card_color
+            figsize=(9, 4.3),
+            dpi=100,
+            facecolor="#1D1D1D"
         )
+
         self.cpu_axis = self.figure.add_subplot(211)
         self.network_axis = self.figure.add_subplot(212)
 
-        self.configure_axis(self.cpu_axis, "CPU AND MEMORY USAGE", "%")
-        self.configure_axis(
-            self.network_axis, "NETWORK DOWNLOAD AND UPLOAD", "KB/s"
-        )
-        self.figure.tight_layout(pad=2.2)
-
-        self.chart_canvas = FigureCanvasTkAgg(
-            self.figure, master=chart_frame
-        )
-        self.chart_canvas.get_tk_widget().pack(
-            fill="both", expand=True, padx=10, pady=10
+        self.figure.subplots_adjust(
+            left=0.09,
+            right=0.97,
+            top=0.94,
+            bottom=0.10,
+            hspace=0.55
         )
 
-        self.system_label = ctk.CTkLabel(
-            self.content, text="Loading system information...",
-            font=ctk.CTkFont(size=11),
-            text_color=self.muted_color, justify="left"
+        self.canvas = FigureCanvasTkAgg(
+            self.figure,
+            master=graph_panel
         )
-        self.system_label.grid(
-            row=4, column=0, columnspan=2,
-            sticky="ew", pady=(12, 0)
+        self.canvas.get_tk_widget().pack(
+            fill="both",
+            expand=True,
+            padx=10,
+            pady=10
         )
 
-        self.update_metrics()
+        self.update_dashboard()
 
-    def configure_axis(self, axis, title, ylabel):
-        axis.set_facecolor(self.card_color)
-        axis.set_title(
-            title, color=self.text_color, fontsize=9, loc="left"
-        )
-        axis.set_ylabel(ylabel, color=self.muted_color, fontsize=8)
-        axis.tick_params(colors=self.muted_color, labelsize=8)
-        axis.grid(color="#393e45", alpha=0.6)
-        axis.spines["top"].set_visible(False)
-        axis.spines["right"].set_visible(False)
-        axis.spines["bottom"].set_color("#393e45")
-        axis.spines["left"].set_color("#393e45")
-
-    def update_metrics(self):
+    def update_dashboard(self):
         if self.current_page != "Dashboard":
             return
 
         try:
-            data = self.monitor.get_metrics()
+            metrics = self.system_monitor.get_metrics()
 
-            self.cpu_value.configure(text=f"{data['cpu']:.1f}%")
-            self.ram_value.configure(text=f"{data['ram']:.1f}%")
-            self.disk_value.configure(text=f"{data['disk']:.1f}%")
+            cpu = self.safe_metric(metrics, "cpu")
+            ram = self.safe_metric(metrics, "ram")
+            disk = self.safe_metric(metrics, "disk")
 
+            download_speed = self.safe_metric(
+                metrics, "download_speed"
+            )
+            upload_speed = self.safe_metric(
+                metrics, "upload_speed"
+            )
+
+            self.cpu_value.configure(
+                text=f"{cpu:.1f}%"
+            )
+            self.ram_value.configure(
+                text=f"{ram:.1f}%"
+            )
+            self.disk_value.configure(
+                text=f"{disk:.1f}%"
+            )
             self.network_value.configure(
+                text=self.system_monitor.format_speed(download_speed)
+            )
+
+            computer = metrics.get("computer", "Unknown")
+            operating_system = metrics.get("os", "Unknown")
+            processor = metrics.get("processor", "Unknown")
+            uptime = metrics.get("uptime", "Unknown")
+
+            self.info_label.configure(
                 text=(
-                    f"{self.monitor.format_speed(data['download_speed'])} / "
-                    f"{self.monitor.format_speed(data['upload_speed'])}"
+                    f"Computer: {computer}     "
+                    f"Operating System: {operating_system}\n"
+                    f"Processor: {processor}\n"
+                    f"Uptime: {uptime}\n"
+                    f"Upload: {self.system_monitor.format_speed(upload_speed)}"
+                    f"     Download: "
+                    f"{self.system_monitor.format_speed(download_speed)}"
                 )
             )
 
-            self.cpu_history.append(data["cpu"])
-            self.ram_history.append(data["ram"])
-            self.download_history.append(data["download_speed"] / 1024)
-            self.upload_history.append(data["upload_speed"] / 1024)
+            self.cpu_history.append(cpu)
+            self.ram_history.append(ram)
+            self.network_history.append(
+                download_speed / 1024
+            )
 
             self.cpu_history = self.cpu_history[-self.history_limit:]
             self.ram_history = self.ram_history[-self.history_limit:]
-            self.download_history = self.download_history[-self.history_limit:]
-            self.upload_history = self.upload_history[-self.history_limit:]
+            self.network_history = self.network_history[-self.history_limit:]
 
-            x_values = list(range(len(self.cpu_history)))
+            self.update_dashboard_graphs()
 
-            self.cpu_axis.clear()
-            self.configure_axis(
-                self.cpu_axis, "CPU AND MEMORY USAGE", "%"
-            )
-            self.cpu_axis.set_ylim(0, 100)
-            self.cpu_axis.plot(
-                x_values, self.cpu_history,
-                color="#8b9cf6", label="CPU"
-            )
-            self.cpu_axis.plot(
-                x_values, self.ram_history,
-                color="#65c8a0", label="RAM"
-            )
-            self.cpu_axis.legend(
-                facecolor=self.card_color,
-                labelcolor=self.text_color, fontsize=8
+            # Check for system resource alerts
+            self.alert_manager.check_metrics(metrics)
+
+        except Exception as error:
+            self.info_label.configure(
+                text=f"Unable to refresh dashboard: {error}"
             )
 
-            self.network_axis.clear()
-            self.configure_axis(
-                self.network_axis, "NETWORK DOWNLOAD AND UPLOAD", "KB/s"
-            )
-            self.network_axis.plot(
-                x_values, self.download_history,
-                color="#8b9cf6", label="Download"
-            )
-            self.network_axis.plot(
-                x_values, self.upload_history,
-                color="#e6b566", label="Upload"
-            )
-            self.network_axis.legend(
-                facecolor=self.card_color,
-                labelcolor=self.text_color, fontsize=8
-            )
+        self.schedule_job(2000, self.update_dashboard)
 
-            self.figure.tight_layout(pad=2.2)
-            self.chart_canvas.draw_idle()
+    def update_dashboard_graphs(self):
+        points = list(range(1, len(self.cpu_history) + 1))
 
-            self.system_label.configure(
-                text=(
-                    f"Computer: {data['computer']}  |  OS: {data['os']}  |  "
-                    f"Physical cores: {data['physical_cores']}  |  "
-                    f"Logical cores: {data['logical_cores']}\n"
-                    f"RAM: {data['ram_used_gb']:.2f} / "
-                    f"{data['ram_total_gb']:.2f} GB  |  "
-                    f"Disk: {data['disk_used_gb']:.1f} / "
-                    f"{data['disk_total_gb']:.1f} GB  |  "
-                    f"Uptime: {data['uptime']}"
-                )
-            )
+        self.cpu_axis.clear()
+        self.cpu_axis.set_facecolor("#1D1D1D")
+        self.cpu_axis.plot(
+            points,
+            self.cpu_history,
+            label="CPU",
+            linewidth=2
+        )
+        self.cpu_axis.plot(
+            points,
+            self.ram_history,
+            label="RAM",
+            linewidth=2
+        )
+        self.cpu_axis.set_title(
+            "CPU and RAM Usage (%)",
+            color="#FFFFFF",
+            fontsize=10
+        )
+        self.cpu_axis.set_ylim(0, 100)
+        self.cpu_axis.tick_params(
+            colors="#AAAAAA",
+            labelsize=8
+        )
+        self.cpu_axis.grid(
+            True,
+            alpha=0.15
+        )
+        self.cpu_axis.legend(
+            facecolor="#292929",
+            labelcolor="#FFFFFF",
+            fontsize=8
+        )
 
-        except (OSError, RuntimeError, ValueError, KeyError) as error:
-            self.system_label.configure(text=f"Monitoring error: {error}")
+        self.network_axis.clear()
+        self.network_axis.set_facecolor("#1D1D1D")
+        self.network_axis.plot(
+            points,
+            self.network_history,
+            label="Download",
+            linewidth=2
+        )
+        self.network_axis.set_title(
+            "Network Download (KB/s)",
+            color="#FFFFFF",
+            fontsize=10
+        )
+        self.network_axis.tick_params(
+            colors="#AAAAAA",
+            labelsize=8
+        )
+        self.network_axis.grid(
+            True,
+            alpha=0.15
+        )
+        self.network_axis.legend(
+            facecolor="#292929",
+            labelcolor="#FFFFFF",
+            fontsize=8
+        )
 
-        self.refresh_job = self.after(1000, self.update_metrics)
+        self.canvas.draw_idle()
+
+    # =========================
+    # PROCESS MANAGER
+    # =========================
 
     def show_processes(self):
-        self.clear_content()
-        self.content.grid_columnconfigure(0, weight=1)
-        self.content.grid_rowconfigure(2, weight=1)
+        self.content_frame.grid_columnconfigure(0, weight=1)
+        self.content_frame.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(
-            self.content, text="Process Manager",
-            font=ctk.CTkFont(size=27, weight="bold"),
-            text_color=self.text_color
-        ).grid(row=0, column=0, sticky="w")
-
-        ctk.CTkLabel(
-            self.content,
-            text="Inspect running applications and their resource usage.",
-            font=ctk.CTkFont(size=13),
-            text_color=self.muted_color
-        ).grid(row=1, column=0, sticky="w", pady=(5, 18))
+        self.create_page_header(
+            "Process Manager",
+            "View, search, and manage running processes"
+        )
 
         toolbar = ctk.CTkFrame(
-            self.content, fg_color="transparent"
+            self.content_frame,
+            fg_color="transparent"
         )
-        toolbar.grid(row=2, column=0, sticky="new", pady=(0, 12))
+        toolbar.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=28,
+            pady=(0, 12)
+        )
+
         toolbar.grid_columnconfigure(0, weight=1)
 
-        self.process_search = ctk.CTkEntry(
+        self.process_search_var = tk.StringVar()
+
+        search_entry = ctk.CTkEntry(
             toolbar,
-            placeholder_text="Search process name or PID...",
-            height=38
+            textvariable=self.process_search_var,
+            placeholder_text="Search by process name or PID...",
+            height=36
         )
-        self.process_search.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        self.process_search.bind(
-            "<KeyRelease>", lambda event: self.populate_process_table()
+        search_entry.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 10)
+        )
+
+        search_entry.bind(
+            "<KeyRelease>",
+            lambda event: self.refresh_processes()
         )
 
         ctk.CTkButton(
-            toolbar, text="Refresh", width=100, height=38,
+            toolbar,
+            text="Refresh",
+            width=100,
+            height=36,
+            fg_color="#353535",
+            hover_color="#4A4A4A",
             command=self.refresh_processes
-        ).grid(row=0, column=1, padx=4)
+        ).grid(
+            row=0,
+            column=1,
+            padx=(0, 8)
+        )
 
         ctk.CTkButton(
-            toolbar, text="End Process", width=120, height=38,
-            fg_color="#843e45", hover_color="#a64c55",
+            toolbar,
+            text="End Process",
+            width=120,
+            height=36,
+            fg_color="#6B3030",
+            hover_color="#853838",
             command=self.end_selected_process
-        ).grid(row=0, column=2, padx=(4, 0))
+        ).grid(
+            row=0,
+            column=2
+        )
 
         table_frame = ctk.CTkFrame(
-            self.content, fg_color=self.card_color, corner_radius=10
+            self.content_frame,
+            fg_color="#1D1D1D",
+            corner_radius=10
         )
-        table_frame.grid(row=3, column=0, sticky="nsew")
-        table_frame.grid_columnconfigure(0, weight=1)
+        table_frame.grid(
+            row=2,
+            column=0,
+            sticky="nsew",
+            padx=28,
+            pady=(0, 10)
+        )
         table_frame.grid_rowconfigure(0, weight=1)
-        self.content.grid_rowconfigure(3, weight=1)
+        table_frame.grid_columnconfigure(0, weight=1)
 
-        style = ttk.Style()
-        style.theme_use("clam")
-        style.configure(
-            "Sentinel.Treeview",
-            background="#202429",
-            foreground="#f1f3f5",
-            fieldbackground="#202429",
-            rowheight=30,
-            borderwidth=0
-        )
-        style.configure(
-            "Sentinel.Treeview.Heading",
-            background="#303640",
-            foreground="#ffffff",
-            relief="flat"
-        )
-        style.map(
-            "Sentinel.Treeview",
-            background=[("selected", "#46516b")],
-            foreground=[("selected", "#ffffff")]
+        columns = (
+            "pid",
+            "name",
+            "username",
+            "cpu",
+            "memory",
+            "status"
         )
 
-        columns = ("pid", "name", "cpu", "memory", "status")
-
-        self.process_table = ttk.Treeview(
+        self.process_tree = ttk.Treeview(
             table_frame,
             columns=columns,
             show="headings",
-            style="Sentinel.Treeview",
             selectmode="browse"
         )
 
         headings = {
-            "pid": ("PID", 80),
-            "name": ("Process Name", 250),
-            "cpu": ("CPU %", 100),
-            "memory": ("Memory (MB)", 120),
-            "status": ("Status", 130)
+            "pid": "PID",
+            "name": "Process Name",
+            "username": "User",
+            "cpu": "CPU %",
+            "memory": "Memory (MB)",
+            "status": "Status"
         }
 
-        for column, (heading, width) in headings.items():
-            self.process_table.heading(
+        widths = {
+            "pid": 80,
+            "name": 250,
+            "username": 180,
+            "cpu": 100,
+            "memory": 130,
+            "status": 130
+        }
+
+        for column in columns:
+            self.process_tree.heading(
                 column,
-                text=heading,
-                command=lambda c=column: self.sort_processes(c)
+                text=headings[column]
             )
-            self.process_table.column(
-                column, width=width, anchor="w"
+            self.process_tree.column(
+                column,
+                width=widths[column],
+                minwidth=60,
+                anchor="w"
             )
 
-        scrollbar = ttk.Scrollbar(
-            table_frame, orient="vertical",
-            command=self.process_table.yview
+        vertical_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="vertical",
+            command=self.process_tree.yview
         )
-        self.process_table.configure(yscrollcommand=scrollbar.set)
-
-        self.process_table.grid(
-            row=0, column=0, sticky="nsew", padx=(8, 0), pady=8
-        )
-        scrollbar.grid(row=0, column=1, sticky="ns", padx=(0, 8), pady=8)
-
-        self.process_count_label = ctk.CTkLabel(
-            self.content, text="Loading processes...",
-            font=ctk.CTkFont(size=12),
-            text_color=self.muted_color
-        )
-        self.process_count_label.grid(
-            row=4, column=0, sticky="w", pady=(12, 0)
+        horizontal_scroll = ttk.Scrollbar(
+            table_frame,
+            orient="horizontal",
+            command=self.process_tree.xview
         )
 
-        self.sort_column = "cpu"
-        self.sort_descending = True
+        self.process_tree.configure(
+            yscrollcommand=vertical_scroll.set,
+            xscrollcommand=horizontal_scroll.set
+        )
+
+        self.process_tree.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+        vertical_scroll.grid(
+            row=0,
+            column=1,
+            sticky="ns"
+        )
+        horizontal_scroll.grid(
+            row=1,
+            column=0,
+            sticky="ew"
+        )
+
+        self.process_status_label = ctk.CTkLabel(
+            self.content_frame,
+            text="Loading processes...",
+            text_color="#999999",
+            font=ctk.CTkFont(size=11)
+        )
+        self.process_status_label.grid(
+            row=3,
+            column=0,
+            sticky="w",
+            padx=30,
+            pady=(0, 15)
+        )
+
         self.refresh_processes()
+        self.schedule_job(5000, self.auto_refresh_processes)
 
-    def refresh_processes(self):
+    def auto_refresh_processes(self):
         if self.current_page != "Processes":
             return
 
-        try:
-            self.process_data = self.process_manager.get_processes()
-            self.populate_process_table()
-        except (OSError, RuntimeError, psutil.Error) as error:
-            messagebox.showerror(
-                "Process Manager Error", str(error), parent=self
-            )
+        self.refresh_processes()
+        self.schedule_job(5000, self.auto_refresh_processes)
 
-        self.process_refresh_job = self.after(
-            3000, self.refresh_processes
-        )
-
-    def populate_process_table(self):
-        if not hasattr(self, "process_table"):
+    def refresh_processes(self):
+        if not hasattr(self, "process_tree"):
             return
 
-        search = self.process_search.get().strip().lower()
+        try:
+            processes = self.process_manager.get_processes()
+            search_text = self.process_search_var.get().strip().lower()
 
-        for item in self.process_table.get_children():
-            self.process_table.delete(item)
+            for item in self.process_tree.get_children():
+                self.process_tree.delete(item)
 
-        filtered = [
-            process for process in self.process_data
-            if search in process["name"].lower()
-            or search in str(process["pid"])
-        ]
+            displayed_count = 0
 
-        filtered.sort(
-            key=lambda process: process.get(
-                self.sort_column, 0
-            ),
-            reverse=self.sort_descending
-        )
+            for process in processes:
+                pid = process.get("pid", "")
+                name = process.get("name", "Unknown")
+                username = process.get("username", "")
+                cpu = process.get("cpu_percent", process.get("cpu", 0))
+                memory = process.get(
+                    "memory_mb",
+                    process.get("memory", 0)
+                )
+                status = process.get("status", "Unknown")
 
-        for process in filtered:
-            self.process_table.insert(
-                "",
-                "end",
-                iid=str(process["pid"]),
-                values=(
-                    process["pid"],
-                    process["name"],
-                    f"{process['cpu_percent']:.1f}",
-                    f"{process['memory_mb']:.1f}",
-                    process["status"]
+                searchable_text = f"{pid} {name}".lower()
+
+                if search_text and search_text not in searchable_text:
+                    continue
+
+                try:
+                    cpu_text = f"{float(cpu):.1f}%"
+                except (TypeError, ValueError):
+                    cpu_text = str(cpu)
+
+                try:
+                    memory_text = f"{float(memory):.1f}"
+                except (TypeError, ValueError):
+                    memory_text = str(memory)
+
+                self.process_tree.insert(
+                    "",
+                    "end",
+                    values=(
+                        pid,
+                        name,
+                        username,
+                        cpu_text,
+                        memory_text,
+                        status
+                    )
+                )
+
+                displayed_count += 1
+
+            self.process_status_label.configure(
+                text=(
+                    f"Showing {displayed_count} processes. "
+                    f"Refreshes automatically every 5 seconds."
                 )
             )
 
-        self.process_count_label.configure(
-            text=f"Showing {len(filtered)} of {len(self.process_data)} processes"
-        )
-
-    def sort_processes(self, column):
-        if self.sort_column == column:
-            self.sort_descending = not self.sort_descending
-        else:
-            self.sort_column = column
-            self.sort_descending = True
-
-        self.populate_process_table()
+        except Exception as error:
+            self.process_status_label.configure(
+                text=f"Unable to load processes: {error}",
+                text_color="#FF7777"
+            )
 
     def end_selected_process(self):
-        selected = self.process_table.selection()
+        selected = self.process_tree.selection()
 
         if not selected:
             messagebox.showwarning(
                 "No Process Selected",
-                "Select a process from the table first.",
+                "Please select a process first.",
                 parent=self
             )
             return
 
-        pid = int(selected[0])
-        process = next(
-            (p for p in self.process_data if p["pid"] == pid),
-            None
+        values = self.process_tree.item(
+            selected[0],
+            "values"
         )
 
-        if process is None:
-            messagebox.showwarning(
-                "Process Not Found",
-                "This process is no longer in the process list.",
-                parent=self
-            )
-            return
+        pid = values[0]
+        process_name = values[1]
 
         confirmed = messagebox.askyesno(
             "Confirm Process Termination",
-            f"Request termination of '{process['name']}' (PID {pid})?\n\n"
-            "Unsaved work in that application may be lost. "
-            "Avoid terminating Windows system processes.",
+            (
+                f"Are you sure you want to end this process?\n\n"
+                f"Process: {process_name}\n"
+                f"PID: {pid}\n\n"
+                "Ending system processes may affect Windows or "
+                "running applications."
+            ),
             parent=self
         )
 
         if not confirmed:
             return
 
-        success, message = self.process_manager.terminate_process(pid)
+        try:
+            result = self.process_manager.terminate_process(int(pid))
 
-        if success:
-            messagebox.showinfo("Process Manager", message, parent=self)
-        else:
-            messagebox.showerror("Process Manager", message, parent=self)
+            if result is False:
+                messagebox.showerror(
+                    "Termination Failed",
+                    f"Could not terminate {process_name}.",
+                    parent=self
+                )
+            else:
+                messagebox.showinfo(
+                    "Process Manager",
+                    f"Termination request sent for {process_name} (PID {pid}).",
+                    parent=self
+                )
 
-        self.refresh_processes()
+            self.refresh_processes()
 
-    def show_placeholder(self, page):
-        self.clear_content()
-
-        details = {
-            "Hardware": (
-                "Hardware Information",
-                "Review hardware specifications and disk storage."
-            ),
-            "Alerts": (
-                "System Health Alerts",
-                "Review warnings and performance thresholds."
-            ),
-            "Reports": (
-                "Performance Reports",
-                "Explore saved measurements and diagnostic reports."
+        except Exception as error:
+            messagebox.showerror(
+                "Termination Error",
+                f"Could not terminate the selected process.\n\n{error}",
+                parent=self
             )
-        }
 
-        title, description = details[page]
+    # =========================
+    # HARDWARE INFORMATION
+    # =========================
 
-        ctk.CTkLabel(
-            self.content, text=title,
-            font=ctk.CTkFont(size=27, weight="bold"),
-            text_color=self.text_color
-        ).pack(anchor="w", pady=(10, 8))
-
-        ctk.CTkLabel(
-            self.content, text=description,
-            font=ctk.CTkFont(size=13),
-            text_color=self.muted_color
-        ).pack(anchor="w", pady=(0, 25))
-
-        placeholder = ctk.CTkFrame(
-            self.content, fg_color=self.card_color, corner_radius=12
+    def show_hardware(self):
+        page = HardwarePage(self.content_frame)
+        page.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
         )
-        placeholder.pack(fill="both", expand=True)
 
-        ctk.CTkLabel(
-            placeholder, text="MODULE UNDER DEVELOPMENT",
-            font=ctk.CTkFont(size=17, weight="bold"),
-            text_color=self.text_color
-        ).pack(pady=(100, 10))
+    # =========================
+    # ALERTS
+    # =========================
 
-        ctk.CTkLabel(
-            placeholder,
-            text="This section will be implemented in a later stage.",
-            font=ctk.CTkFont(size=13),
-            text_color=self.muted_color
-        ).pack()
+    def show_alerts(self):
+        page = AlertsPage(
+            self.content_frame,
+            alert_manager=self.alert_manager
+        )
+        page.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
 
-    def close_app(self):
-        for job in (self.refresh_job, self.process_refresh_job):
-            if job is not None:
-                self.after_cancel(job)
+        page.set_metric_provider(
+            self.system_monitor.get_metrics
+        )
+        page.refresh_alerts()
 
+    # =========================
+    # REPORTS
+    # =========================
+
+    def show_reports(self):
+        page = ReportsPage(
+            self.content_frame,
+            system_monitor=self.system_monitor,
+            process_manager=self.process_manager,
+            alert_manager=self.alert_manager
+        )
+
+        page.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+    # =========================
+    # CLOSE APPLICATION
+    # =========================
+
+    def on_close(self):
+        self.cancel_scheduled_jobs()
         self.destroy()
 
 
-if __name__ == "__main__":
-    import psutil
+# =========================
+# RUN SENTINEL
+# =========================
 
+if __name__ == "__main__":
     app = SentinelApp()
     app.mainloop()
