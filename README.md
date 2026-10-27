@@ -8,13 +8,14 @@ The project is being developed using **Python, PyCharm, CustomTkinter, psutil, a
 
 Sentinel provides a centralized dashboard for monitoring computer performance, viewing hardware specifications, managing running processes, identifying potential system resource issues, and exporting monitoring data into CSV reports.
 
-The application includes five main modules:
+The application includes six main modules:
 
 1. **Dashboard** — Monitor CPU, memory, disk, and network activity through live statistics and performance graphs.
 2. **Processes** — View running processes, search by process name or PID, inspect resource usage, and request process termination.
 3. **Hardware Information** — Display processor specifications, memory information, storage drives, network adapters, battery status, temperature readings where supported, and operating system details.
 4. **Alerts** — Detect high CPU usage, high memory usage, and high disk usage based on configured thresholds.
 5. **Reports** — Generate and export system metrics, running process information, active alerts, and alert history as CSV files.
+6. **Settings** — Configure alert thresholds and automatic dashboard and process refresh intervals, with settings saved locally in a JSON file.
 
 ## Current Development Progress
 
@@ -37,7 +38,16 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Alert Manager** — Monitor CPU, RAM, and disk usage against configurable thresholds.
 - **Alert Severity** — Classify resource alerts as Warning or Critical according to configured limits and current readings.
 - **Active Alerts** — Display currently triggered resource alerts.
-- **Alert History** — Record newly triggered alert events in memory, with a maximum of 200 entries.
+- **Alert History** — Record newly triggered alert events and retain up to 200 recent events in a local JSON file.
+- **Persistent Alert History** — Load previously saved alert events when Sentinel starts and save new events when alerts are triggered.
+- **Duplicate Alert Prevention** — Record an alert when it first becomes active instead of repeatedly recording it on every monitoring refresh.
+- **Alert History Management** — Retrieve, save, load, and clear the stored alert history.
+- **Settings Manager** — Load, validate, update, and save application settings in `settings.json`.
+- **Configurable Alert Thresholds** — Set CPU, RAM, and disk alert thresholds through the Settings page.
+- **Configurable Refresh Intervals** — Set the dashboard refresh interval and process list refresh interval.
+- **Settings Validation** — Restrict resource thresholds to 1–100%, dashboard refresh to 1–60 seconds, and process refresh to 2–300 seconds.
+- **Settings Reset** — Restore the default settings when needed.
+- **Settings Integration** — Apply saved alert thresholds to the shared alert manager and use configured intervals for scheduled dashboard and process refreshes.
 - **System Metrics Report** — Export current system metrics, including available CPU, memory, disk, network, and other monitoring information.
 - **Process Report** — Export information about currently running processes.
 - **Active Alerts Report** — Export alerts that are currently active.
@@ -46,12 +56,13 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Save Location Selection** — Choose the destination and filename for exported reports through a save-file dialog.
 - **Export Feedback** — Display success or error messages when exporting reports.
 - **Shared Monitoring Integration** — Connect the Dashboard and Alerts page to the system monitoring and alert management components.
-- **Main Application Navigation** — Provide navigation for Dashboard, Processes, Hardware, Alerts, and Reports.
+- **Main Application Navigation** — Provide navigation for Dashboard, Processes, Hardware, Alerts, Reports, and Settings.
 - **Dark Interface** — Use a consistent dark-themed desktop layout with charcoal, black, and grey colors.
 
 ### Current Limitations
 
-- Alert history is stored in memory and is cleared when the application closes.
+- Alert history is persisted locally in `data/alert_history.json`; the Alerts page must use the alert manager's history method to display saved events correctly.
+- Settings are stored locally in `settings.json` and are not synchronized between devices.
 - Reports contain a snapshot of the information available when the export is requested; continuous historical metric recording is not yet implemented.
 - Hardware temperature readings depend on available sensor support and may not appear on some Windows computers.
 - Battery information is unavailable on systems without a supported battery interface.
@@ -87,13 +98,20 @@ Sentinel/
 │   ├── process_manager.py
 │   ├── hardware_info.py
 │   ├── alert_manager.py
+│   ├── settings_manager.py
 │   └── report_manager.py
 │
 ├── ui/
 │   ├── __init__.py
 │   ├── hardware.py
 │   ├── alerts.py
-│   └── reports.py
+│   ├── reports.py
+│   └── settings.py
+│
+├── data/
+│   └── alert_history.json
+│
+├── settings.json
 │
 ├── database/
 │   ├── __init__.py
@@ -146,7 +164,9 @@ From the project's root directory, run:
 python main.py
 ```
 
-The main window should open with navigation for Dashboard, Processes, Hardware, Alerts, and Reports.
+The main window should open with navigation for Dashboard, Processes, Hardware, Alerts, Reports, and Settings.
+
+On first launch, `settings.json` is created automatically with default settings. The `data/alert_history.json` file and its parent folder are created when alert history is saved; the history file may not exist until an alert is recorded or history is explicitly saved.
 
 ## Module Details
 
@@ -216,11 +236,48 @@ The module includes:
 - Active alert summaries.
 - Alert severity indicators.
 - Alert timestamps and descriptions.
-- Configurable resource thresholds through the `AlertManager` class.
-- An in-memory history of newly triggered alert events.
-- A maximum alert history of 200 entries.
+- Configurable resource thresholds managed by `AlertManager` and the Settings page.
+- Persistent history of newly triggered alert events stored in `data/alert_history.json`.
+- Automatic loading of saved history when the alert manager starts.
+- A maximum history size of 200 recent events.
+- Duplicate prevention while an alert remains continuously active.
+- A method to clear the saved alert history.
 
-Alert history is session-based and is not retained after Sentinel closes.
+Default thresholds:
+
+| Resource | Default threshold |
+|---|---:|
+| CPU usage | 85% |
+| RAM usage | 85% |
+| Disk usage | 90% |
+
+Readings at or above 95% are classified as Critical. Alert history persistence is handled by the alert manager; the Alerts page needs to read the history through `get_alert_history()` to display saved events.
+
+### Settings
+
+The Settings page uses `core/settings_manager.py` to manage Sentinel's local configuration. The shared settings manager loads the existing settings at startup, validates changes, and saves valid settings to `settings.json` in the project root.
+
+#### Available Settings
+
+| Setting | Default | Allowed range |
+|---|---:|---:|
+| CPU alert threshold | 85% | 1–100% |
+| RAM alert threshold | 85% | 1–100% |
+| Disk alert threshold | 90% | 1–100% |
+| Dashboard refresh interval | 2 seconds | 1–60 seconds |
+| Process list refresh interval | 5 seconds | 2–300 seconds |
+
+#### Settings Features
+
+- Load settings from `settings.json`.
+- Create default settings automatically when the file does not exist.
+- Validate values before saving.
+- Save changes through the Settings page.
+- Reset settings to their default values.
+- Apply alert thresholds to the shared `AlertManager`.
+- Use configured intervals for scheduled dashboard and process-list updates.
+
+Changes to refresh intervals affect subsequent scheduled refreshes. Settings are stored locally on the computer and are not synchronized to another device.
 
 ### Reports
 
@@ -257,7 +314,7 @@ Exports alert events recorded by Sentinel during the current application session
 
 - Reports are snapshots, not live documents.
 - System metrics and process information reflect the data collected when the report is generated.
-- Alert history is stored in memory and is lost when the application closes.
+- Alert history is stored in `data/alert_history.json` and can persist between application sessions.
 - If no alerts or processes are available, the report records an appropriate empty-state message.
 - Database-backed report storage and long-term historical analysis remain potential future improvements.
 
@@ -296,8 +353,10 @@ The actual timestamp depends on when each report is exported.
 | 4 | Hardware Information module | Implemented; further refinement planned |
 | 5 | Alert Manager and Alerts page | Implemented; further refinement planned |
 | 6 | Reports page and CSV exports | Implemented; testing and refinement planned |
-| 7 | Database and persistent monitoring history | Planned |
-| 8 | Integration testing, performance optimization, and refinement | In progress |
+| 7 | Settings page and JSON configuration manager | Implemented; testing and refinement planned |
+| 8 | Persistent alert history in JSON | Implemented; Alerts page display integration should be verified |
+| 9 | Database-backed monitoring history | Planned |
+| 10 | Integration testing, performance optimization, and refinement | In progress |
 
 ## Project Purpose
 
