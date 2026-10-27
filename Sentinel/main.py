@@ -1,20 +1,23 @@
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-from datetime import datetime
 
 from core.system_monitor import SystemMonitor
 from core.process_manager import ProcessManager
 from core.alert_manager import AlertManager
+from core.settings_manager import SettingsManager
+
 from ui.hardware import HardwarePage
 from ui.alerts import AlertsPage
 from ui.reports import ReportsPage
+from ui.settings import SettingsPage
 
 
 # =========================
-# SENTINEL MAIN APPLICATION
+# SENTINEL CONFIGURATION
 # =========================
 
 ctk.set_appearance_mode("dark")
@@ -34,25 +37,52 @@ class SentinelApp(ctk.CTk):
         self.system_monitor = SystemMonitor()
         self.process_manager = ProcessManager()
         self.alert_manager = AlertManager()
+        self.settings_manager = SettingsManager()
 
-        # Navigation and scheduled tasks
+        # Navigation
         self.current_page = None
         self.after_jobs = []
 
-        # Dashboard graph data
+        # Dashboard graph history
         self.cpu_history = []
         self.ram_history = []
         self.network_history = []
         self.history_limit = 30
 
-        # Process table data
+        # Process search
         self.process_search_var = tk.StringVar()
 
         self.configure_styles()
         self.create_layout()
+
+        # Apply saved settings before displaying the application
+        self.apply_settings()
+
         self.navigate("Dashboard")
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # =========================
+    # SETTINGS INTEGRATION
+    # =========================
+
+    def apply_settings(self):
+        """Apply saved resource thresholds to the alert manager."""
+        settings = self.settings_manager.get_settings()
+
+        self.alert_manager.update_thresholds(
+            cpu_limit=settings["cpu_limit"],
+            ram_limit=settings["ram_limit"],
+            disk_limit=settings["disk_limit"]
+        )
+
+    def get_refresh_interval(self, setting_name, default):
+        """Return a refresh interval from the saved settings."""
+        try:
+            settings = self.settings_manager.get_settings()
+            return max(1, int(settings.get(setting_name, default)))
+        except (ValueError, TypeError):
+            return default
 
     # =========================
     # APPLICATION LAYOUT
@@ -113,7 +143,7 @@ class SentinelApp(ctk.CTk):
         )
         self.sidebar.grid_propagate(False)
 
-        # Main content
+        # Main content area
         self.content_frame = ctk.CTkFrame(
             self,
             corner_radius=0,
@@ -159,7 +189,8 @@ class SentinelApp(ctk.CTk):
             ("Processes", "Processes"),
             ("Hardware", "Hardware"),
             ("Alerts", "Alerts"),
-            ("Reports", "Reports")
+            ("Reports", "Reports"),
+            ("Settings", "Settings")
         ]
 
         for label, page in navigation_items:
@@ -186,7 +217,6 @@ class SentinelApp(ctk.CTk):
 
             self.nav_buttons[page] = button
 
-        # Sidebar footer
         ctk.CTkFrame(
             self.sidebar,
             height=1,
@@ -272,6 +302,9 @@ class SentinelApp(ctk.CTk):
 
         elif page == "Reports":
             self.show_reports()
+
+        elif page == "Settings":
+            self.show_settings()
 
     # =========================
     # SHARED UI HELPERS
@@ -410,7 +443,7 @@ class SentinelApp(ctk.CTk):
             cards_frame, "DOWNLOAD SPEED", "0 KB/s", 3
         )
 
-        # System information panel
+        # System information
         self.info_panel = ctk.CTkFrame(
             dashboard_body,
             fg_color="#1D1D1D",
@@ -438,7 +471,7 @@ class SentinelApp(ctk.CTk):
             pady=15
         )
 
-        # Graphs panel
+        # Performance graphs
         graph_panel = ctk.CTkFrame(
             dashboard_body,
             fg_color="#1D1D1D",
@@ -501,6 +534,9 @@ class SentinelApp(ctk.CTk):
         try:
             metrics = self.system_monitor.get_metrics()
 
+            # Apply any updated settings
+            self.apply_settings()
+
             cpu = self.safe_metric(metrics, "cpu")
             ram = self.safe_metric(metrics, "ram")
             disk = self.safe_metric(metrics, "disk")
@@ -512,15 +548,10 @@ class SentinelApp(ctk.CTk):
                 metrics, "upload_speed"
             )
 
-            self.cpu_value.configure(
-                text=f"{cpu:.1f}%"
-            )
-            self.ram_value.configure(
-                text=f"{ram:.1f}%"
-            )
-            self.disk_value.configure(
-                text=f"{disk:.1f}%"
-            )
+            self.cpu_value.configure(text=f"{cpu:.1f}%")
+            self.ram_value.configure(text=f"{ram:.1f}%")
+            self.disk_value.configure(text=f"{disk:.1f}%")
+
             self.network_value.configure(
                 text=self.system_monitor.format_speed(download_speed)
             )
@@ -544,9 +575,7 @@ class SentinelApp(ctk.CTk):
 
             self.cpu_history.append(cpu)
             self.ram_history.append(ram)
-            self.network_history.append(
-                download_speed / 1024
-            )
+            self.network_history.append(download_speed / 1024)
 
             self.cpu_history = self.cpu_history[-self.history_limit:]
             self.ram_history = self.ram_history[-self.history_limit:]
@@ -554,7 +583,7 @@ class SentinelApp(ctk.CTk):
 
             self.update_dashboard_graphs()
 
-            # Check for system resource alerts
+            # Evaluate current metrics against configured thresholds
             self.alert_manager.check_metrics(metrics)
 
         except Exception as error:
@@ -562,13 +591,22 @@ class SentinelApp(ctk.CTk):
                 text=f"Unable to refresh dashboard: {error}"
             )
 
-        self.schedule_job(2000, self.update_dashboard)
+        refresh_seconds = self.get_refresh_interval(
+            "dashboard_refresh_seconds",
+            2
+        )
+
+        self.schedule_job(
+            refresh_seconds * 1000,
+            self.update_dashboard
+        )
 
     def update_dashboard_graphs(self):
         points = list(range(1, len(self.cpu_history) + 1))
 
         self.cpu_axis.clear()
         self.cpu_axis.set_facecolor("#1D1D1D")
+
         self.cpu_axis.plot(
             points,
             self.cpu_history,
@@ -581,6 +619,7 @@ class SentinelApp(ctk.CTk):
             label="RAM",
             linewidth=2
         )
+
         self.cpu_axis.set_title(
             "CPU and RAM Usage (%)",
             color="#FFFFFF",
@@ -591,10 +630,7 @@ class SentinelApp(ctk.CTk):
             colors="#AAAAAA",
             labelsize=8
         )
-        self.cpu_axis.grid(
-            True,
-            alpha=0.15
-        )
+        self.cpu_axis.grid(True, alpha=0.15)
         self.cpu_axis.legend(
             facecolor="#292929",
             labelcolor="#FFFFFF",
@@ -603,12 +639,14 @@ class SentinelApp(ctk.CTk):
 
         self.network_axis.clear()
         self.network_axis.set_facecolor("#1D1D1D")
+
         self.network_axis.plot(
             points,
             self.network_history,
             label="Download",
             linewidth=2
         )
+
         self.network_axis.set_title(
             "Network Download (KB/s)",
             color="#FFFFFF",
@@ -618,10 +656,7 @@ class SentinelApp(ctk.CTk):
             colors="#AAAAAA",
             labelsize=8
         )
-        self.network_axis.grid(
-            True,
-            alpha=0.15
-        )
+        self.network_axis.grid(True, alpha=0.15)
         self.network_axis.legend(
             facecolor="#292929",
             labelcolor="#FFFFFF",
@@ -636,7 +671,7 @@ class SentinelApp(ctk.CTk):
 
     def show_processes(self):
         self.content_frame.grid_columnconfigure(0, weight=1)
-        self.content_frame.grid_rowconfigure(1, weight=1)
+        self.content_frame.grid_rowconfigure(2, weight=1)
 
         self.create_page_header(
             "Process Manager",
@@ -654,7 +689,6 @@ class SentinelApp(ctk.CTk):
             padx=28,
             pady=(0, 12)
         )
-
         toolbar.grid_columnconfigure(0, weight=1)
 
         self.process_search_var = tk.StringVar()
@@ -812,14 +846,28 @@ class SentinelApp(ctk.CTk):
         )
 
         self.refresh_processes()
-        self.schedule_job(5000, self.auto_refresh_processes)
+        self.schedule_process_refresh()
+
+    def schedule_process_refresh(self):
+        if self.current_page != "Processes":
+            return
+
+        refresh_seconds = self.get_refresh_interval(
+            "process_refresh_seconds",
+            5
+        )
+
+        self.schedule_job(
+            refresh_seconds * 1000,
+            self.auto_refresh_processes
+        )
 
     def auto_refresh_processes(self):
         if self.current_page != "Processes":
             return
 
         self.refresh_processes()
-        self.schedule_job(5000, self.auto_refresh_processes)
+        self.schedule_process_refresh()
 
     def refresh_processes(self):
         if not hasattr(self, "process_tree"):
@@ -838,11 +886,17 @@ class SentinelApp(ctk.CTk):
                 pid = process.get("pid", "")
                 name = process.get("name", "Unknown")
                 username = process.get("username", "")
-                cpu = process.get("cpu_percent", process.get("cpu", 0))
+
+                cpu = process.get(
+                    "cpu_percent",
+                    process.get("cpu", 0)
+                )
+
                 memory = process.get(
                     "memory_mb",
                     process.get("memory", 0)
                 )
+
                 status = process.get("status", "Unknown")
 
                 searchable_text = f"{pid} {name}".lower()
@@ -878,8 +932,11 @@ class SentinelApp(ctk.CTk):
             self.process_status_label.configure(
                 text=(
                     f"Showing {displayed_count} processes. "
-                    f"Refreshes automatically every 5 seconds."
-                )
+                    f"Refresh interval: "
+                    f"{self.get_refresh_interval('process_refresh_seconds', 5)} "
+                    f"seconds."
+                ),
+                text_color="#999999"
             )
 
         except Exception as error:
@@ -934,7 +991,10 @@ class SentinelApp(ctk.CTk):
             else:
                 messagebox.showinfo(
                     "Process Manager",
-                    f"Termination request sent for {process_name} (PID {pid}).",
+                    (
+                        f"Termination request sent for "
+                        f"{process_name} (PID {pid})."
+                    ),
                     parent=self
                 )
 
@@ -943,7 +1003,10 @@ class SentinelApp(ctk.CTk):
         except Exception as error:
             messagebox.showerror(
                 "Termination Error",
-                f"Could not terminate the selected process.\n\n{error}",
+                (
+                    "Could not terminate the selected process.\n\n"
+                    f"{error}"
+                ),
                 parent=self
             )
 
@@ -953,6 +1016,7 @@ class SentinelApp(ctk.CTk):
 
     def show_hardware(self):
         page = HardwarePage(self.content_frame)
+
         page.grid(
             row=0,
             column=0,
@@ -964,10 +1028,13 @@ class SentinelApp(ctk.CTk):
     # =========================
 
     def show_alerts(self):
+        self.apply_settings()
+
         page = AlertsPage(
             self.content_frame,
             alert_manager=self.alert_manager
         )
+
         page.grid(
             row=0,
             column=0,
@@ -977,6 +1044,7 @@ class SentinelApp(ctk.CTk):
         page.set_metric_provider(
             self.system_monitor.get_metrics
         )
+
         page.refresh_alerts()
 
     # =========================
@@ -989,6 +1057,22 @@ class SentinelApp(ctk.CTk):
             system_monitor=self.system_monitor,
             process_manager=self.process_manager,
             alert_manager=self.alert_manager
+        )
+
+        page.grid(
+            row=0,
+            column=0,
+            sticky="nsew"
+        )
+
+    # =========================
+    # SETTINGS
+    # =========================
+
+    def show_settings(self):
+        page = SettingsPage(
+            self.content_frame,
+            settings_manager=self.settings_manager
         )
 
         page.grid(
