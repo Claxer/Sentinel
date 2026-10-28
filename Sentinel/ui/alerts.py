@@ -1,318 +1,411 @@
 import customtkinter as ctk
-
-from core.alert_manager import AlertManager
+from tkinter import messagebox
+from datetime import datetime
 
 
 class AlertsPage(ctk.CTkFrame):
     def __init__(self, parent, alert_manager=None):
-        super().__init__(parent, fg_color="transparent")
+        super().__init__(parent, fg_color="#151515")
 
-        self.alert_manager = alert_manager or AlertManager()
+        self.alert_manager = alert_manager
         self.metric_provider = None
+        self.active_alerts = []
+        self.alert_history = []
 
-        self.create_interface()
+        self.build_ui()
         self.refresh_alerts()
 
-    def create_interface(self):
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=(20, 10))
+    # ============================================================
+    # USER INTERFACE
+    # ============================================================
 
-        title_area = ctk.CTkFrame(
-            header, fg_color="transparent"
-        )
-        title_area.pack(side="left", fill="x", expand=True)
+    def build_ui(self):
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=24, pady=(22, 12))
 
         ctk.CTkLabel(
-            title_area,
-            text="System Alerts",
-            font=ctk.CTkFont(size=25, weight="bold"),
+            header,
+            text="Alerts",
+            font=("Segoe UI", 27, "bold"),
             text_color="#F2F2F2"
         ).pack(anchor="w")
 
         ctk.CTkLabel(
-            title_area,
-            text="Monitor resource warnings and system conditions",
-            font=ctk.CTkFont(size=12),
-            text_color="#A0A0A0"
+            header,
+            text="Monitor resource warnings and review previous alert events.",
+            font=("Segoe UI", 12),
+            text_color="#999999"
         ).pack(anchor="w", pady=(4, 0))
 
-        ctk.CTkButton(
-            header,
-            text="Refresh",
-            width=100,
-            command=self.refresh_alerts,
-            fg_color="#343434",
-            hover_color="#484848"
-        ).pack(side="right")
-
-        self.scroll_area = ctk.CTkScrollableFrame(
-            self, fg_color="transparent"
-        )
-        self.scroll_area.pack(
-            fill="both", expand=True, padx=20, pady=(0, 20)
-        )
-
-        self.summary_frame = ctk.CTkFrame(
-            self.scroll_area, fg_color="transparent"
-        )
-        self.summary_frame.pack(fill="x", pady=(5, 15))
-
-        self.summary_labels = {}
-
-        for index, (key, heading) in enumerate([
-            ("active", "Active Alerts"),
-            ("critical", "Critical"),
-            ("warnings", "Warnings")
-        ]):
-            self.summary_frame.grid_columnconfigure(
-                index, weight=1
-            )
-
-            card = ctk.CTkFrame(
-                self.summary_frame,
-                fg_color="#202020",
-                corner_radius=10,
-                height=90
-            )
-            card.grid(
-                row=0, column=index, sticky="nsew",
-                padx=(0 if index == 0 else 5, 5)
-            )
-            card.grid_propagate(False)
-
-            ctk.CTkLabel(
-                card,
-                text=heading,
-                text_color="#A0A0A0",
-                font=ctk.CTkFont(size=12)
-            ).pack(anchor="w", padx=12, pady=(12, 3))
-
-            number = ctk.CTkLabel(
-                card,
-                text="0",
-                text_color="#F2F2F2",
-                font=ctk.CTkFont(size=24, weight="bold")
-            )
-            number.pack(anchor="w", padx=12)
-
-            self.summary_labels[key] = number
-
-        ctk.CTkLabel(
-            self.scroll_area,
-            text="Active Alerts",
-            font=ctk.CTkFont(size=17, weight="bold"),
-            text_color="#EEEEEE"
-        ).pack(anchor="w", pady=(5, 8))
-
-        self.active_frame = ctk.CTkFrame(
-            self.scroll_area,
-            fg_color="#202020",
-            corner_radius=10
-        )
-        self.active_frame.pack(fill="x", pady=(0, 18))
-
-        ctk.CTkLabel(
-            self.scroll_area,
-            text="Alert History",
-            font=ctk.CTkFont(size=17, weight="bold"),
-            text_color="#EEEEEE"
-        ).pack(anchor="w", pady=(5, 8))
-
-        history_header = ctk.CTkFrame(
-            self.scroll_area, fg_color="transparent"
-        )
-        history_header.pack(fill="x", pady=(0, 8))
-
-        self.history_count = ctk.CTkLabel(
-            history_header,
-            text="Recent alert events",
-            text_color="#A0A0A0"
-        )
-        self.history_count.pack(side="left")
+        toolbar = ctk.CTkFrame(self, fg_color="transparent")
+        toolbar.pack(fill="x", padx=24, pady=(4, 14))
 
         ctk.CTkButton(
-            history_header,
+            toolbar,
+            text="Refresh Alerts",
+            width=130,
+            fg_color="#303030",
+            hover_color="#414141",
+            command=self.refresh_alerts
+        ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            toolbar,
             text="Clear History",
-            width=110,
-            fg_color="#343434",
-            hover_color="#484848",
+            width=120,
+            fg_color="#612B2B",
+            hover_color="#813737",
             command=self.clear_history
-        ).pack(side="right")
-
-        self.history_frame = ctk.CTkFrame(
-            self.scroll_area,
-            fg_color="#202020",
-            corner_radius=10
-        )
-        self.history_frame.pack(fill="x", pady=(0, 15))
+        ).pack(side="left")
 
         self.status_label = ctk.CTkLabel(
-            self.scroll_area,
-            text="Ready",
-            text_color="#A0A0A0",
-            font=ctk.CTkFont(size=11)
+            toolbar,
+            text="",
+            font=("Segoe UI", 11),
+            text_color="#999999"
         )
-        self.status_label.pack(anchor="w", pady=(0, 10))
+        self.status_label.pack(side="right")
+
+        # Active alerts
+        ctk.CTkLabel(
+            self,
+            text="ACTIVE ALERTS",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#E6E6E6"
+        ).pack(anchor="w", padx=24, pady=(4, 8))
+
+        self.active_frame = ctk.CTkScrollableFrame(
+            self,
+            fg_color="#1D1D1D",
+            corner_radius=10,
+            height=200
+        )
+        self.active_frame.pack(
+            fill="x",
+            padx=24,
+            pady=(0, 18)
+        )
+
+        # Alert history
+        history_header = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+        history_header.pack(
+            fill="x",
+            padx=24,
+            pady=(0, 8)
+        )
+
+        ctk.CTkLabel(
+            history_header,
+            text="ALERT HISTORY",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#E6E6E6"
+        ).pack(side="left")
+
+        self.history_count_label = ctk.CTkLabel(
+            history_header,
+            text="0 events",
+            font=("Segoe UI", 11),
+            text_color="#999999"
+        )
+        self.history_count_label.pack(side="right")
+
+        self.history_frame = ctk.CTkScrollableFrame(
+            self,
+            fg_color="#1D1D1D",
+            corner_radius=10
+        )
+        self.history_frame.pack(
+            fill="both",
+            expand=True,
+            padx=24,
+            pady=(0, 22)
+        )
+
+    # ============================================================
+    # METRIC PROVIDER
+    # ============================================================
 
     def set_metric_provider(self, provider):
-        """Set a callable that returns the latest system metrics."""
+        """Set a callback that returns the latest system metrics."""
         self.metric_provider = provider
 
+    # ============================================================
+    # REFRESH ALERTS
+    # ============================================================
+
     def refresh_alerts(self):
+        if self.alert_manager is None:
+            self.show_active_empty(
+                "Alert manager is not connected."
+            )
+            self.show_history_empty(
+                "Alert history is unavailable."
+            )
+            self.status_label.configure(
+                text="Alert manager unavailable"
+            )
+            return
+
+        # Ask the app for current metrics when a provider is available.
         if self.metric_provider is not None:
             try:
                 metrics = self.metric_provider()
-                self.alert_manager.check_metrics(metrics)
+
+                if isinstance(metrics, dict):
+                    self.alert_manager.check_metrics(metrics)
+
             except Exception as error:
                 self.status_label.configure(
-                    text=f"Unable to check system metrics: {error}",
-                    text_color="#E07070"
+                    text=f"Metric update failed: {error}"
                 )
-                return
 
-        self.render_alerts()
+        try:
+            self.active_alerts = (
+                self.alert_manager.get_active_alerts() or []
+            )
+        except Exception as error:
+            self.active_alerts = []
+            self.status_label.configure(
+                text=f"Could not load active alerts: {error}"
+            )
 
-    def render_alerts(self):
-        active = self.alert_manager.get_active_alerts()
-        history = self.alert_manager.get_alert_history()
+        try:
+            self.alert_history = (
+                self.alert_manager.get_alert_history() or []
+            )
+        except Exception as error:
+            self.alert_history = []
+            self.status_label.configure(
+                text=f"Could not load history: {error}"
+            )
 
-        critical_count = sum(
-            1 for alert in active
-            if alert["severity"] == "Critical"
-        )
-        warning_count = sum(
-            1 for alert in active
-            if alert["severity"] == "Warning"
-        )
-
-        self.summary_labels["active"].configure(
-            text=str(len(active))
-        )
-        self.summary_labels["critical"].configure(
-            text=str(critical_count)
-        )
-        self.summary_labels["warnings"].configure(
-            text=str(warning_count)
-        )
-
-        self.render_active_alerts(active)
-        self.render_history(history)
+        self.render_active_alerts()
+        self.render_alert_history()
 
         self.status_label.configure(
-            text="Alert information updated.",
-            text_color="#A0A0A0"
+            text=f"Last refreshed: {datetime.now().strftime('%H:%M:%S')}"
         )
 
-    def render_active_alerts(self, active):
+    # ============================================================
+    # ACTIVE ALERTS
+    # ============================================================
+
+    def render_active_alerts(self):
         for widget in self.active_frame.winfo_children():
             widget.destroy()
 
-        if not active:
-            ctk.CTkLabel(
-                self.active_frame,
-                text="No active alerts. Your monitored metrics are within their configured limits.",
-                text_color="#A0A0A0",
-                wraplength=650,
-                justify="left"
-            ).pack(anchor="w", padx=15, pady=18)
+        if not self.active_alerts:
+            self.show_active_empty(
+                "No active alerts. System resource usage is within limits."
+            )
             return
 
-        for alert in active:
-            color = (
-                "#E07070"
-                if alert["severity"] == "Critical"
-                else "#E0B060"
-            )
-
-            card = ctk.CTkFrame(
+        for alert in self.active_alerts:
+            self.create_alert_card(
                 self.active_frame,
-                fg_color="#292929",
-                corner_radius=8
+                alert,
+                is_history=False
             )
-            card.pack(fill="x", padx=10, pady=6)
 
-            top = ctk.CTkFrame(
-                card, fg_color="transparent"
-            )
-            top.pack(fill="x", padx=12, pady=(10, 3))
+    def show_active_empty(self, message):
+        for widget in self.active_frame.winfo_children():
+            widget.destroy()
 
-            ctk.CTkLabel(
-                top,
-                text=alert["title"],
-                font=ctk.CTkFont(size=14, weight="bold"),
-                text_color="#F0F0F0"
-            ).pack(side="left")
+        ctk.CTkLabel(
+            self.active_frame,
+            text=message,
+            text_color="#999999",
+            font=("Segoe UI", 12)
+        ).pack(padx=15, pady=24)
 
-            ctk.CTkLabel(
-                top,
-                text=alert["severity"].upper(),
-                text_color=color,
-                font=ctk.CTkFont(size=11, weight="bold")
-            ).pack(side="right")
+    # ============================================================
+    # ALERT HISTORY
+    # ============================================================
 
-            ctk.CTkLabel(
-                card,
-                text=(
-                    f'{alert["description"]} '
-                    f'Current reading: {alert["value"]}% '
-                    f'(limit: {alert["limit"]}%).'
-                ),
-                text_color="#BBBBBB",
-                wraplength=650,
-                justify="left"
-            ).pack(anchor="w", padx=12, pady=(2, 5))
-
-            ctk.CTkLabel(
-                card,
-                text=f'First detected: {alert["timestamp"]}',
-                text_color="#888888",
-                font=ctk.CTkFont(size=10)
-            ).pack(anchor="w", padx=12, pady=(0, 10))
-
-    def render_history(self, history):
+    def render_alert_history(self):
         for widget in self.history_frame.winfo_children():
             widget.destroy()
 
-        self.history_count.configure(
-            text=f"{len(history)} recorded alert events"
+        self.history_count_label.configure(
+            text=f"{len(self.alert_history)} events"
         )
 
-        if not history:
-            ctk.CTkLabel(
-                self.history_frame,
-                text="No alert events have been recorded yet.",
-                text_color="#A0A0A0"
-            ).pack(anchor="w", padx=15, pady=18)
+        if not self.alert_history:
+            self.show_history_empty(
+                "No alert events have been recorded yet."
+            )
             return
 
-        for alert in history:
-            row = ctk.CTkFrame(
+        # Newest events appear first.
+        for alert in reversed(self.alert_history):
+            self.create_alert_card(
                 self.history_frame,
-                fg_color="transparent"
+                alert,
+                is_history=True
             )
-            row.pack(fill="x", padx=12, pady=8)
 
-            ctk.CTkLabel(
-                row,
-                text=alert["title"],
-                text_color="#EEEEEE",
-                anchor="w"
-            ).pack(side="left", fill="x", expand=True)
+    def show_history_empty(self, message):
+        for widget in self.history_frame.winfo_children():
+            widget.destroy()
 
-            ctk.CTkLabel(
-                row,
-                text=f'{alert["value"]}%',
-                text_color="#BBBBBB",
-                width=55
-            ).pack(side="left")
+        ctk.CTkLabel(
+            self.history_frame,
+            text=message,
+            text_color="#999999",
+            font=("Segoe UI", 12)
+        ).pack(padx=15, pady=24)
 
-            ctk.CTkLabel(
-                row,
-                text=alert["timestamp"],
-                text_color="#888888",
-                font=ctk.CTkFont(size=10)
-            ).pack(side="right")
+    # ============================================================
+    # ALERT CARD
+    # ============================================================
+
+    def create_alert_card(self, parent, alert, is_history=False):
+        severity = str(alert.get("severity", "Warning")).title()
+
+        if severity == "Critical":
+            severity_color = "#FF6666"
+        else:
+            severity_color = "#E5B567"
+
+        card = ctk.CTkFrame(
+            parent,
+            fg_color="#262626",
+            corner_radius=8,
+            border_width=1,
+            border_color="#353535"
+        )
+        card.pack(fill="x", padx=8, pady=5)
+
+        top_row = ctk.CTkFrame(
+            card,
+            fg_color="transparent"
+        )
+        top_row.pack(
+            fill="x",
+            padx=12,
+            pady=(10, 4)
+        )
+
+        name = alert.get(
+            "name",
+            alert.get("metric", "System Alert")
+        )
+
+        ctk.CTkLabel(
+            top_row,
+            text=str(name),
+            font=("Segoe UI", 13, "bold"),
+            text_color="#F0F0F0"
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            top_row,
+            text=severity.upper(),
+            font=("Segoe UI", 10, "bold"),
+            text_color=severity_color
+        ).pack(side="right")
+
+        message = alert.get(
+            "message",
+            "A system resource threshold was exceeded."
+        )
+
+        ctk.CTkLabel(
+            card,
+            text=str(message),
+            font=("Segoe UI", 11),
+            text_color="#BBBBBB",
+            wraplength=850,
+            justify="left"
+        ).pack(
+            anchor="w",
+            padx=12,
+            pady=(0, 6)
+        )
+
+        value = alert.get("value")
+        threshold = alert.get("threshold")
+        timestamp = alert.get("timestamp", "Unknown time")
+
+        if isinstance(timestamp, (int, float)):
+            try:
+                timestamp = datetime.fromtimestamp(
+                    timestamp
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, OSError, OverflowError):
+                timestamp = str(timestamp)
+
+        details = []
+
+        if value is not None:
+            details.append(f"Value: {value}%")
+
+        if threshold is not None:
+            details.append(f"Limit: {threshold}%")
+
+        details.append(f"Time: {timestamp}")
+
+        if is_history:
+            details.append("Recorded event")
+
+        ctk.CTkLabel(
+            card,
+            text="  |  ".join(details),
+            font=("Segoe UI", 10),
+            text_color="#888888"
+        ).pack(
+            anchor="w",
+            padx=12,
+            pady=(0, 10)
+        )
+
+    # ============================================================
+    # CLEAR HISTORY
+    # ============================================================
 
     def clear_history(self):
-        self.alert_manager.clear_history()
-        self.render_alerts()
+        if self.alert_manager is None:
+            messagebox.showerror(
+                "Alerts",
+                "The alert manager is not available.",
+                parent=self
+            )
+            return
+
+        if not self.alert_history:
+            messagebox.showinfo(
+                "Alert History",
+                "There is no alert history to clear.",
+                parent=self
+            )
+            return
+
+        confirmed = messagebox.askyesno(
+            "Clear Alert History",
+            "Are you sure you want to permanently clear saved "
+            "alert history? Active alerts will not be removed.",
+            parent=self
+        )
+
+        if not confirmed:
+            return
+
+        try:
+            self.alert_manager.clear_history()
+            self.refresh_alerts()
+
+            messagebox.showinfo(
+                "Alert History",
+                "Saved alert history has been cleared.",
+                parent=self
+            )
+
+        except Exception as error:
+            messagebox.showerror(
+                "Clear History Failed",
+                f"Could not clear alert history:\n\n{error}",
+                parent=self
+            )
