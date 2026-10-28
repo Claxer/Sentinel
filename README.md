@@ -27,9 +27,13 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **System Monitoring** — Collect CPU usage, RAM usage, disk usage, network transfer speeds, computer information, and system uptime using `psutil`.
 - **Live Performance Graphs** — Display CPU and RAM usage alongside network download activity using Matplotlib.
 - **Automatic Dashboard Updates** — Refresh system metrics and graphs periodically.
-- **Process Manager** — Display running processes with their PID, name, CPU usage, memory usage, user, and status.
+- **Process Manager** — Collect and display running processes with their PID, name, CPU usage, memory usage, username, and status.
+- **Safer Process Enumeration** — Skip processes that disappear or cannot be accessed while process information is being collected.
+- **Process Sorting** — Sort collected processes by CPU usage.
 - **Process Search** — Search for processes by name or process ID.
-- **Process Termination** — Request termination of a selected process after user confirmation, subject to operating system permissions.
+- **Process Details** — Retrieve information about a selected process and return a clear success or error result.
+- **Process Termination** — Validate process IDs, prevent attempts to terminate Sentinel itself, request termination, and wait up to three seconds for the process to exit.
+- **Process Error Handling** — Handle inaccessible, invalid, or already-terminated processes without unnecessarily interrupting process collection.
 - **Automatic Process Refresh** — Refresh the process list periodically.
 - **Hardware Information** — Collect processor details, physical and logical cores, CPU frequency where available, RAM and swap usage, storage capacity, network adapter details, and system information.
 - **Battery Information** — Retrieve battery percentage, power connection status, and estimated remaining time when supported.
@@ -37,11 +41,12 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Network Adapter Details** — Display adapter status, available IPv4 addresses, reported link speed, and cumulative sent and received data.
 - **Alert Manager** — Monitor CPU, RAM, and disk usage against configurable thresholds.
 - **Alert Severity** — Classify resource alerts as Warning or Critical according to configured limits and current readings.
-- **Active Alerts** — Display currently triggered resource alerts.
-- **Alert History** — Record newly triggered alert events and retain up to 200 recent events in a local JSON file.
-- **Persistent Alert History** — Load previously saved alert events when Sentinel starts and save new events when alerts are triggered.
+- **Active Alerts** — Display currently triggered resource alerts on the Alerts page.
+- **Alert Refresh** — Refresh active alerts and alert history through the Alerts page.
+- **Alert History Display** — Retrieve and display recorded alert events using the alert manager.
+- **Persistent Alert History** — Load previously saved alert events from `data/alert_history.json` and save new events.
 - **Duplicate Alert Prevention** — Record an alert when it first becomes active instead of repeatedly recording it on every monitoring refresh.
-- **Alert History Management** — Retrieve, save, load, and clear the stored alert history.
+- **Alert History Management** — Clear saved alert-history events through the Alerts page.
 - **Settings Manager** — Load, validate, update, and save application settings in `settings.json`.
 - **Configurable Alert Thresholds** — Set CPU, RAM, and disk alert thresholds through the Settings page.
 - **Configurable Refresh Intervals** — Set the dashboard refresh interval and process list refresh interval.
@@ -51,23 +56,22 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **System Metrics Report** — Export current system metrics, including available CPU, memory, disk, network, and other monitoring information.
 - **Process Report** — Export information about currently running processes.
 - **Active Alerts Report** — Export alerts that are currently active.
-- **Alert History Report** — Export alert events recorded during the current application session.
+- **Alert History Report** — Export recorded alert events.
 - **CSV Export** — Save reports as `.csv` files that can be opened in spreadsheet applications.
 - **Save Location Selection** — Choose the destination and filename for exported reports through a save-file dialog.
 - **Export Feedback** — Display success or error messages when exporting reports.
-- **Shared Monitoring Integration** — Connect the Dashboard and Alerts page to the system monitoring and alert management components.
-- **Main Application Navigation** — Provide navigation for Dashboard, Processes, Hardware, Alerts, Reports, and Settings.
 - **Dark Interface** — Use a consistent dark-themed desktop layout with charcoal, black, and grey colors.
 
 ### Current Limitations
 
-- Alert history is persisted locally in `data/alert_history.json`; the Alerts page must use the alert manager's history method to display saved events correctly.
+- Alert history is persisted locally in `data/alert_history.json` and is limited to the 200 most recent events.
 - Settings are stored locally in `settings.json` and are not synchronized between devices.
 - Reports contain a snapshot of the information available when the export is requested; continuous historical metric recording is not yet implemented.
 - Hardware temperature readings depend on available sensor support and may not appear on some Windows computers.
 - Battery information is unavailable on systems without a supported battery interface.
 - CPU frequency and network link speed may not be reported on every system.
-- Process termination may fail when administrator permissions are required or the operating system prevents access.
+- Process information may be unavailable for protected or short-lived processes.
+- Process termination may fail when administrator permissions are required or the operating system prevents access. Ending essential system processes may cause instability.
 - Storage usage information does not currently provide a complete SSD or HDD health assessment.
 - The application is still under development, and further testing and performance improvements are planned.
 
@@ -79,6 +83,7 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Matplotlib** — Live performance graphs and data visualization.
 - **Tkinter and ttk** — Native interface components, process tables, scrollbars, file dialogs, and confirmation messages.
 - **CSV module** — Export monitoring information into comma-separated value files.
+- **JSON** — Store application settings and alert history.
 - **PyCharm** — Development environment.
 - **Windows 11** — Primary development platform.
 
@@ -126,7 +131,7 @@ Sentinel/
     └── icons/
 ```
 
-**Note:** This is an overview of the project structure, including folders reserved for future development. In the current implementation, the Dashboard and Process Manager are integrated directly into `main.py`, while Hardware, Alerts, and Reports use separate interface modules. Some listed database and utility files may not exist yet.
+**Note:** This is an overview of the project structure, including folders reserved for future development. Some listed database and utility files may not exist yet.
 
 ## Installation
 
@@ -154,7 +159,7 @@ psutil
 matplotlib
 ```
 
-The CSV functionality uses Python's built-in `csv` module, so an additional package is not required.
+The CSV and JSON functionality uses Python's built-in modules, so additional packages are not required for those features.
 
 ### 4. Run Sentinel
 
@@ -188,17 +193,28 @@ The Dashboard provides an overview of current system performance.
 
 ### Process Manager
 
-The Process Manager provides a searchable view of running processes.
+The Process Manager provides a searchable view of running processes and supports controlled process termination.
 
-- Process ID and name.
+#### Process Information
+
+- Process ID (PID) and process name.
 - CPU usage and memory consumption.
 - Username and process status.
+- Processes sorted by CPU usage.
 - Search by process name or PID.
 - Periodic process list refresh.
-- Selected-process termination with confirmation.
-- Error handling for inaccessible or terminated processes.
 
-Process termination is subject to operating system permissions and should be used carefully. Ending essential system processes may cause instability.
+#### Process Safety and Error Handling
+
+- Skip processes that disappear during collection.
+- Handle access-denied and other process-related errors.
+- Retrieve details for a selected process.
+- Validate process IDs before requesting termination.
+- Prevent attempts to terminate Sentinel's own process.
+- Request termination and wait up to three seconds for the process to exit.
+- Return success or error messages when retrieving details or terminating a process.
+
+Process termination is subject to operating system permissions. Some protected processes cannot be terminated without administrator privileges. Use this feature carefully because ending essential system processes may cause instability.
 
 ### Hardware Information
 
@@ -219,9 +235,9 @@ The Hardware module presents information collected by `core/hardware_info.py`.
 
 ### Alerts
 
-The Alerts module uses `core/alert_manager.py` to evaluate monitored system metrics.
+The Alerts page uses `ui/alerts.py` to present active alerts and alert history, while `core/alert_manager.py` handles resource threshold checks and persistent history.
 
-Default thresholds:
+#### Default Alert Thresholds
 
 | Resource | Default threshold |
 |---|---:|
@@ -231,27 +247,21 @@ Default thresholds:
 
 Readings at or above 95% are classified as Critical.
 
-The module includes:
+#### Alert Features
 
-- Active alert summaries.
-- Alert severity indicators.
-- Alert timestamps and descriptions.
-- Configurable resource thresholds managed by `AlertManager` and the Settings page.
-- Persistent history of newly triggered alert events stored in `data/alert_history.json`.
-- Automatic loading of saved history when the alert manager starts.
-- A maximum history size of 200 recent events.
-- Duplicate prevention while an alert remains continuously active.
-- A method to clear the saved alert history.
+- **Active Alerts** — View currently triggered resource alerts.
+- **Alert Severity** — Identify alerts classified as Warning or Critical.
+- **Alert Details** — View available alert timestamps and descriptions.
+- **Refresh Alerts** — Refresh the displayed active alerts and history.
+- **Metric Integration** — Request current system metrics and check them through the alert manager when the page is refreshed.
+- **Alert History Display** — View previously recorded alert events, including events that are no longer active.
+- **Persistent History** — Load and save alert events through `data/alert_history.json`.
+- **Clear History** — Clear saved alert-history events from the Alerts page.
+- **History Limit** — Retain up to 200 recent events.
+- **Duplicate Prevention** — Avoid repeatedly recording the same alert while it remains continuously active.
+- **Configurable Thresholds** — Use CPU, RAM, and disk thresholds managed by `AlertManager` and the Settings page.
 
-Default thresholds:
-
-| Resource | Default threshold |
-|---|---:|
-| CPU usage | 85% |
-| RAM usage | 85% |
-| Disk usage | 90% |
-
-Readings at or above 95% are classified as Critical. Alert history persistence is handled by the alert manager; the Alerts page needs to read the history through `get_alert_history()` to display saved events.
+Alert history is retrieved through `get_alert_history()`. Clearing history removes the stored history events; it does not change the configured resource thresholds.
 
 ### Settings
 
@@ -299,7 +309,7 @@ Exports alerts that are active at the time of the request, including their times
 
 **4. Alert History Report**
 
-Exports alert events recorded by Sentinel during the current application session. The report can include previously triggered alerts even if they are no longer active.
+Exports recorded alert events, including previously triggered alerts that may no longer be active.
 
 #### Export Features
 
@@ -337,8 +347,10 @@ The actual timestamp depends on when each report is exported.
 - **Modular Architecture** — Keep monitoring logic separate from interface components where practical.
 - **Live Monitoring** — Display regularly refreshed system metrics and performance graphs.
 - **Process Management** — Provide process visibility and controlled termination requests.
+- **Process Safety** — Handle unavailable processes and prevent unsafe termination attempts where possible.
 - **System Diagnostics** — Collect hardware, storage, network, and operating system information.
 - **Alert Monitoring** — Identify resource usage that exceeds configured thresholds.
+- **Alert History** — Preserve and display recorded alert events between application sessions.
 - **Report Generation** — Make monitoring information available as exportable CSV files.
 - **Maintainability** — Develop individual modules independently while preserving existing functionality.
 - **Extensibility** — Provide a foundation for persistent monitoring history, report generation, and additional diagnostics.
@@ -349,12 +361,12 @@ The actual timestamp depends on when each report is exported.
 |---|---|---|
 | 1 | Project foundation and main application | Implemented |
 | 2 | System monitoring and live graphs | Implemented |
-| 3 | Process Manager | Implemented |
+| 3 | Process Manager | Implemented; safer process handling added |
 | 4 | Hardware Information module | Implemented; further refinement planned |
-| 5 | Alert Manager and Alerts page | Implemented; further refinement planned |
+| 5 | Alert Manager and Alerts page | Implemented; refresh and history controls added |
 | 6 | Reports page and CSV exports | Implemented; testing and refinement planned |
 | 7 | Settings page and JSON configuration manager | Implemented; testing and refinement planned |
-| 8 | Persistent alert history in JSON | Implemented; Alerts page display integration should be verified |
+| 8 | Persistent alert history in JSON with Alerts page history display and controls | Implemented |
 | 9 | Database-backed monitoring history | Planned |
 | 10 | Integration testing, performance optimization, and refinement | In progress |
 
@@ -364,4 +376,4 @@ Sentinel is a personal software development project focused on building practica
 
 It provides hands-on experience with graphical user interfaces, operating system information, resource monitoring, process management, data visualization, alert logic, CSV file handling, and application architecture.
 
-The project will continue to expand as additional modules are developed, tested, and integrated into the main application.
+The project will continue to expand as additional modules are developed, tested, and integrated into the application.
