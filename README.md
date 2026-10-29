@@ -31,8 +31,9 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Safer Process Enumeration** — Skip processes that disappear or cannot be accessed while process information is being collected.
 - **Process Sorting** — Sort collected processes by CPU usage.
 - **Process Search** — Search for processes by name or process ID.
-- **Process Details** — Retrieve information about a selected process and return a clear success or error result.
+- **Process Details** — Retrieve information about a selected process, including available process information, and return a clear success or error result.
 - **Process Termination** — Validate process IDs, prevent attempts to terminate Sentinel itself, request termination, and wait up to three seconds for the process to exit.
+- **Process Termination Safety** — Avoid automatically force-killing a process if it does not exit within the timeout.
 - **Process Error Handling** — Handle inaccessible, invalid, or already-terminated processes without unnecessarily interrupting process collection.
 - **Automatic Process Refresh** — Refresh the process list periodically.
 - **Hardware Information** — Collect processor details, physical and logical cores, CPU frequency where available, RAM and swap usage, storage capacity, network adapter details, and system information.
@@ -41,12 +42,16 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - **Network Adapter Details** — Display adapter status, available IPv4 addresses, reported link speed, and cumulative sent and received data.
 - **Alert Manager** — Monitor CPU, RAM, and disk usage against configurable thresholds.
 - **Alert Severity** — Classify resource alerts as Warning or Critical according to configured limits and current readings.
-- **Active Alerts** — Display currently triggered resource alerts on the Alerts page.
+- **Active Alert Summary** — Display summary counts for active alerts and Critical alerts on the Alerts page.
+- **Active Alert Cards** — Display alert titles, severity, descriptions, timestamps, and available current values and configured thresholds.
 - **Alert Refresh** — Refresh active alerts and alert history through the Alerts page.
-- **Alert History Display** — Retrieve and display recorded alert events using the alert manager.
+- **Metric Integration** — Allow the Alerts page to request current metrics from a configured provider and check them through the alert manager.
+- **Alert History Display** — Retrieve and display recorded alert events, including events that are no longer active.
+- **Newest-First History Display** — Show the most recently recorded alert events first.
 - **Persistent Alert History** — Load previously saved alert events from `data/alert_history.json` and save new events.
 - **Duplicate Alert Prevention** — Record an alert when it first becomes active instead of repeatedly recording it on every monitoring refresh.
-- **Alert History Management** — Clear saved alert-history events through the Alerts page.
+- **Alert History Management** — Clear saved alert-history events through the Alerts page, with a confirmation prompt before deletion.
+- **Alert Empty States** — Display helpful messages when no active alerts or history events are available.
 - **Settings Manager** — Load, validate, update, and save application settings in `settings.json`.
 - **Configurable Alert Thresholds** — Set CPU, RAM, and disk alert thresholds through the Settings page.
 - **Configurable Refresh Intervals** — Set the dashboard refresh interval and process list refresh interval.
@@ -71,7 +76,10 @@ Sentinel is developed in stages, starting with core monitoring components and in
 - Battery information is unavailable on systems without a supported battery interface.
 - CPU frequency and network link speed may not be reported on every system.
 - Process information may be unavailable for protected or short-lived processes.
-- Process termination may fail when administrator permissions are required or the operating system prevents access. Ending essential system processes may cause instability.
+- Process termination may fail when administrator permissions are required or the operating system prevents access.
+- Ending essential system processes may cause instability.
+- The application requests process termination but does not automatically force-kill a process if it does not exit within three seconds.
+- The Alerts page depends on a working connection to the alert manager. Its metric-refresh feature requires a metric provider to be configured by the main application.
 - Storage usage information does not currently provide a complete SSD or HDD health assessment.
 - The application is still under development, and further testing and performance improvements are planned.
 
@@ -131,7 +139,7 @@ Sentinel/
     └── icons/
 ```
 
-**Note:** This is an overview of the project structure, including folders reserved for future development. Some listed database and utility files may not exist yet.
+**Note:** This is an overview of the project structure, including folders reserved for future development. Some listed database and utility files may not exist yet. The `data/alert_history.json` file may also be created automatically when alert history is saved.
 
 ## Installation
 
@@ -193,26 +201,41 @@ The Dashboard provides an overview of current system performance.
 
 ### Process Manager
 
-The Process Manager provides a searchable view of running processes and supports controlled process termination.
+The Process Manager provides a searchable view of running processes and supports controlled process termination. Its core logic is located in `core/process_manager.py`.
 
 #### Process Information
 
 - Process ID (PID) and process name.
 - CPU usage and memory consumption.
 - Username and process status.
+- Memory usage reported in megabytes.
 - Processes sorted by CPU usage.
-- Search by process name or PID.
-- Periodic process list refresh.
+- Search by process name or PID through the application interface.
+- Periodic process list refresh through the application interface.
+
+The process manager returns process information as dictionaries containing fields such as `pid`, `name`, `username`, `memory`, `memory_mb`, `cpu`, `cpu_percent`, and `status`. Some fields may contain fallback values if information is unavailable.
+
+#### Process Details
+
+The `get_process_details(pid)` method retrieves available information about a selected process, such as:
+
+- Process ID and name.
+- Username and status.
+- CPU usage and memory usage.
+- Creation time, executable path, and command line when accessible.
+
+The method returns a structured result containing `success`, `message`, and `process` fields. If a process cannot be found or accessed, it returns an error result rather than assuming the requested information is available.
 
 #### Process Safety and Error Handling
 
 - Skip processes that disappear during collection.
 - Handle access-denied and other process-related errors.
-- Retrieve details for a selected process.
+- Ignore inaccessible or short-lived processes during process enumeration.
 - Validate process IDs before requesting termination.
 - Prevent attempts to terminate Sentinel's own process.
-- Request termination and wait up to three seconds for the process to exit.
-- Return success or error messages when retrieving details or terminating a process.
+- Request process termination and wait up to three seconds for the process to exit.
+- Return a success or error message when retrieving details or terminating a process.
+- Do not automatically force-kill a process if it does not exit within the timeout.
 
 Process termination is subject to operating system permissions. Some protected processes cannot be terminated without administrator privileges. Use this feature carefully because ending essential system processes may cause instability.
 
@@ -233,6 +256,8 @@ The Hardware module presents information collected by `core/hardware_info.py`.
 - Operating system version.
 - Python version, boot time, and uptime.
 
+Some hardware values depend on what the operating system and hardware expose to Python.
+
 ### Alerts
 
 The Alerts page uses `ui/alerts.py` to present active alerts and alert history, while `core/alert_manager.py` handles resource threshold checks and persistent history.
@@ -245,27 +270,43 @@ The Alerts page uses `ui/alerts.py` to present active alerts and alert history, 
 | RAM usage | 85% |
 | Disk usage | 90% |
 
-Readings at or above 95% are classified as Critical.
+Readings at or above 95% are classified as Critical by the alert manager.
 
-#### Alert Features
+#### Alerts Page Interface
 
-- **Active Alerts** — View currently triggered resource alerts.
-- **Alert Severity** — Identify alerts classified as Warning or Critical.
-- **Alert Details** — View available alert timestamps and descriptions.
-- **Refresh Alerts** — Refresh the displayed active alerts and history.
-- **Metric Integration** — Request current system metrics and check them through the alert manager when the page is refreshed.
-- **Alert History Display** — View previously recorded alert events, including events that are no longer active.
-- **Persistent History** — Load and save alert events through `data/alert_history.json`.
-- **Clear History** — Clear saved alert-history events from the Alerts page.
-- **History Limit** — Retain up to 200 recent events.
-- **Duplicate Prevention** — Avoid repeatedly recording the same alert while it remains continuously active.
-- **Configurable Thresholds** — Use CPU, RAM, and disk thresholds managed by `AlertManager` and the Settings page.
+The updated Alerts page uses a dark interface with summary cards and separate scrollable sections for active alerts and alert history.
 
-Alert history is retrieved through `get_alert_history()`. Clearing history removes the stored history events; it does not change the configured resource thresholds.
+- **Active Alerts Summary** — Shows the number of currently active alerts.
+- **Critical Summary** — Shows how many active alerts are classified as Critical.
+- **History Summary** — Shows the number of recorded history events.
+- **Active Alert Cards** — Display alert titles, severity, descriptions, and available timestamps.
+- **Alert Measurements** — Show current values and configured thresholds when those fields are provided by the alert manager.
+- **Refresh Alerts** — Refresh active alerts and history.
+- **Metric Integration** — Request current system metrics through a configured metric provider and pass them to the alert manager for checking.
+- **Alert History Display** — View recorded events, including alerts that may no longer be active.
+- **Newest-First History** — Display the newest saved events at the top.
+- **Clear History** — Ask for confirmation before clearing saved history events.
+- **Empty-State Messages** — Display helpful messages when there are no alerts, no history events, or no alert manager available.
+- **Refresh Error Handling** — Display a status message if refreshing alert information fails.
+
+#### Alert Manager Features
+
+- Monitor CPU, RAM, and disk usage against configured thresholds.
+- Classify alerts as Warning or Critical.
+- Retrieve currently active alerts through `get_active_alerts()`.
+- Retrieve recorded events through `get_alert_history()`.
+- Save and load history through `data/alert_history.json`.
+- Avoid repeatedly recording the same alert while it remains continuously active.
+- Clear recorded history through `clear_history()`.
+- Apply configurable thresholds managed by the Settings page.
+
+The Alerts page expects the alert manager to provide the methods `check_metrics(metrics)`, `get_active_alerts()`, `get_alert_history()`, and `clear_history()`. Its metric-refresh feature also requires the main application to configure a metric provider using `set_metric_provider(provider)`.
+
+Clearing history removes saved history events; it does not change the configured resource thresholds or necessarily resolve currently active alerts.
 
 ### Settings
 
-The Settings page uses `core/settings_manager.py` to manage Sentinel's local configuration. The shared settings manager loads the existing settings at startup, validates changes, and saves valid settings to `settings.json` in the project root.
+The Settings page uses `core/settings_manager.py` to manage Sentinel's local configuration. The shared settings manager loads existing settings at startup, validates changes, and saves valid settings to `settings.json` in the project root.
 
 #### Available Settings
 
@@ -305,7 +346,7 @@ Exports the current process list returned by `ProcessManager`. Depending on the 
 
 **3. Active Alerts Report**
 
-Exports alerts that are active at the time of the request, including their timestamps, titles, descriptions, severity, measured values, configured limits, and status.
+Exports alerts that are active at the time of the request, including available timestamps, titles, descriptions, severity, measured values, configured limits, and status.
 
 **4. Alert History Report**
 
@@ -325,12 +366,12 @@ Exports recorded alert events, including previously triggered alerts that may no
 - Reports are snapshots, not live documents.
 - System metrics and process information reflect the data collected when the report is generated.
 - Alert history is stored in `data/alert_history.json` and can persist between application sessions.
-- If no alerts or processes are available, the report records an appropriate empty-state message.
+- If no alerts or processes are available, the report may contain an appropriate empty-state message.
 - Database-backed report storage and long-term historical analysis remain potential future improvements.
 
 ### Report File Examples
 
-Sentinel generates filenames similar to these:
+Sentinel may generate filenames similar to these:
 
 ```text
 sentinel_system_20261026_180000.csv
@@ -363,7 +404,7 @@ The actual timestamp depends on when each report is exported.
 | 2 | System monitoring and live graphs | Implemented |
 | 3 | Process Manager | Implemented; safer process handling added |
 | 4 | Hardware Information module | Implemented; further refinement planned |
-| 5 | Alert Manager and Alerts page | Implemented; refresh and history controls added |
+| 5 | Alert Manager and Alerts page | Implemented; summary cards, refresh, and history controls added |
 | 6 | Reports page and CSV exports | Implemented; testing and refinement planned |
 | 7 | Settings page and JSON configuration manager | Implemented; testing and refinement planned |
 | 8 | Persistent alert history in JSON with Alerts page history display and controls | Implemented |
